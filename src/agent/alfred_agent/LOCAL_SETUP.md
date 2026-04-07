@@ -132,7 +132,11 @@ No changes needed — it is already set up.
 
 ## Part 5 — Run the Agent
 
-### Step 10: Use the ADK Web UI (Recommended for testing)
+### Step 10: Use the ADK Web UI
+
+Run this from:
+
+`C:\Users\manug\Documents\Alfred\alfred\src\agent\alfred_agent`
 
 `google-adk` comes with a built-in web interface for chatting with your agent. From inside `alfred_agent/`:
 
@@ -144,6 +148,21 @@ Then open your browser to: http://localhost:8000
 
 You will see the Alfred agent in the UI. Type a message to start.
 
+
+### Step 10b: Run the custom Alfred login wrapper
+
+Run this from:
+
+`C:\Users\manug\Documents\Alfred\alfred\src\agent\alfred_agent`
+
+If you want the browser login gatekeeper and per-user OAuth flow locally, run:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python web_login.py
+```
+
+This starts the FastAPI wrapper on `http://localhost:8080`.
 
 ---
 
@@ -193,4 +212,33 @@ pip install -r requirements.txt
 
 # Run the agent
 adk web
+
+# Run the custom login wrapper
+python web_login.py
 ```
+
+## Part 7 â€” Deploy to Cloud Run
+
+To deploy the ADK UI to Cloud Run, run this from `src/agent/alfred_agent/`:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+adk deploy cloud_run --project=alfred-492407 --region=asia-southeast2 --service_name=alfred-agent --with_ui .
+```
+
+This is the Cloud Run command that matches the screenshot-style UI.
+
+To deploy the custom Alfred login wrapper to Cloud Run, run this from `src/agent/alfred_agent/`:
+
+```powershell
+& "C:\Users\manug\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd" run deploy alfred-agent `
+  --source . `
+  --project alfred-492407 `
+  --region asia-southeast2 `
+  --allow-unauthenticated `
+  --port 8080
+```
+
+This uses the `Procfile` entry `web: python web_login.py`, so Cloud Run starts the gatekeeper instead of the plain ADK web UI.
+
+The login wrapper now keeps the MCP helper inside `alfred_agent`, so the deploy stays self-contained in this folder.

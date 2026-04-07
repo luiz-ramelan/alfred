@@ -13,24 +13,39 @@ import google.adk.cli.fast_api as adk_fast_api
 from google.adk.cli.fast_api import get_fast_api_app
 from dotenv import load_dotenv
 
-# Make the parent directory importable so we can import the package module
+# Make both the package layout and the flat buildpack layout importable.
 current_file_dir = os.path.dirname(os.path.abspath(__file__))
 parent_agents_dir = os.path.dirname(current_file_dir)
+if current_file_dir not in sys.path:
+    sys.path.insert(0, current_file_dir)
 if parent_agents_dir not in sys.path:
     sys.path.insert(0, parent_agents_dir)
 
-# Import the token context from the package module used by ADK
-from alfred_agent.agent import (
-    token_context,
-    refresh_token_context,
-    SESSION_ACCESS_TOKEN_KEY,
-    SESSION_REFRESH_TOKEN_KEY,
-    SESSION_TOKEN_EXPIRES_AT_KEY,
-    SESSION_TIMEZONE_KEY,
-    SESSION_LOCALE_KEY,
-    SessionAwareCredentialService,
-    store_session_tokens,
-)
+# Import the token context from the module used by ADK.
+try:
+    from alfred_agent.agent import (
+        token_context,
+        refresh_token_context,
+        SESSION_ACCESS_TOKEN_KEY,
+        SESSION_REFRESH_TOKEN_KEY,
+        SESSION_TOKEN_EXPIRES_AT_KEY,
+        SESSION_TIMEZONE_KEY,
+        SESSION_LOCALE_KEY,
+        SessionAwareCredentialService,
+        store_session_tokens,
+    )
+except ModuleNotFoundError:
+    from agent import (  # type: ignore[no-redef]
+        token_context,
+        refresh_token_context,
+        SESSION_ACCESS_TOKEN_KEY,
+        SESSION_REFRESH_TOKEN_KEY,
+        SESSION_TOKEN_EXPIRES_AT_KEY,
+        SESSION_TIMEZONE_KEY,
+        SESSION_LOCALE_KEY,
+        SessionAwareCredentialService,
+        store_session_tokens,
+    )
 
 adk_fast_api.InMemoryCredentialService = SessionAwareCredentialService
 

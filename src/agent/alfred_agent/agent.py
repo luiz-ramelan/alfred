@@ -1,13 +1,11 @@
 import functools
 import logging
 import os
-import sys
 import time
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from datetime import timedelta
 from typing import Any, Optional
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import google.cloud.logging
@@ -31,10 +29,6 @@ from google.adk.tools.mcp_tool.mcp_session_manager import (
 )
 from google.adk.tools.tool_context import ToolContext
 from google.cloud import firestore
-
-MCP_RUNNER_DIR = Path(__file__).resolve().parents[2] / "mcpRunner"
-if str(MCP_RUNNER_DIR) not in sys.path:
-    sys.path.append(str(MCP_RUNNER_DIR))
 
 from mcp_google_client import MCPGoogleClient
 

@@ -78,12 +78,67 @@ The `GOOGLE_ACCESS_TOKEN` fallback still exists for local debugging, but normal 
 
 ## 🚀 Step 5: Launching Alfred
 
-1. **Open your terminal** in this folder (`c:\Users\manug\Documents\Alfred\alfred\src\agent\alfred_agent`).
-2. **Run Alfred**
+Run everything from this folder:
+
+`C:\Users\manug\Documents\Alfred\alfred\src\agent\alfred_agent`
+
+### Where to run what
+
+| Task | Folder to run from | Command |
+|---|---|---|
+| Local ADK UI | `C:\Users\manug\Documents\Alfred\alfred\src\agent\alfred_agent` | `adk web .` |
+| Local login wrapper | `C:\Users\manug\Documents\Alfred\alfred\src\agent\alfred_agent` | `python web_login.py` |
+| Cloud Run ADK UI | `C:\Users\manug\Documents\Alfred\alfred\src\agent\alfred_agent` | `adk deploy cloud_run --with_ui .` |
+| Cloud Run custom login wrapper | `C:\Users\manug\Documents\Alfred\alfred\src\agent\alfred_agent` | `gcloud run deploy ... --source .` |
+| Cloud Run bundle for the login wrapper | `C:\Users\manug\Documents\Alfred\alfred\src\agent\alfred_agent` | keep the app self-contained in this folder |
+
+1. **Open your terminal** in that folder.
+2. **Run the built-in ADK UI**
    ```powershell
    adk web .
    ```
 3. **Open your browser**: Go to the URL shown in the terminal (usually `http://localhost:8080`).
+
+### Optional: run the custom login wrapper locally
+
+If you want the Alfred gatekeeper and per-user OAuth flow, run:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python web_login.py
+```
+
+That starts the FastAPI wrapper on `http://localhost:8080`.
+
+### Optional: deploy the custom login wrapper to Cloud Run
+
+From `src/agent/alfred_agent/`, deploy the wrapper with:
+
+```powershell
+& "C:\Users\manug\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd" run deploy alfred-agent `
+  --source . `
+  --project alfred-492407 `
+  --region asia-southeast2 `
+  --allow-unauthenticated `
+  --port 8080
+```
+
+This uses the `Procfile` entry `web: python web_login.py`.
+
+### Optional: deploy the ADK UI to Cloud Run
+
+If you want the screenshot-style ADK interface in Cloud Run, run this from the same folder:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+adk deploy cloud_run --project=alfred-492407 --region=asia-southeast2 --service_name=alfred-agent --with_ui .
+```
+
+This deploys the ADK web UI rather than the custom login wrapper.
+
+### Note on the MCP helper
+
+The MCP helper now lives alongside the agent code in `alfred_agent/mcp_google_client.py`, so the login wrapper deploy no longer depends on `src/mcpRunner`.
 
 ---
 
