@@ -3,11 +3,13 @@ import logging
 import secrets
 import json
 import sys
+import time
 from urllib.parse import urlencode
 import requests as http_requests
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 import uvicorn
+import google.adk.cli.fast_api as adk_fast_api
 from google.adk.cli.fast_api import get_fast_api_app
 from dotenv import load_dotenv
 
@@ -23,8 +25,14 @@ from alfred_agent.agent import (
     refresh_token_context,
     SESSION_ACCESS_TOKEN_KEY,
     SESSION_REFRESH_TOKEN_KEY,
+    SESSION_TOKEN_EXPIRES_AT_KEY,
+    SESSION_TIMEZONE_KEY,
+    SESSION_LOCALE_KEY,
+    SessionAwareCredentialService,
     store_session_tokens,
 )
+
+adk_fast_api.InMemoryCredentialService = SessionAwareCredentialService
 
 load_dotenv()
 
@@ -52,9 +60,23 @@ SCOPES = " ".join([
     "email",
     "profile",
     "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/contacts.readonly",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/contacts",
 ])
+
+
+def _parse_int_cookie(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _read_cookie_text(value: str | None) -> str:
+    return (value or "").strip()
 
 # --- HTML Templates ---
 
@@ -131,6 +153,23 @@ def make_login_html(error_msg: str = "") -> str:
             font-size: 0.85rem;
         }}
     </style>
+    <script>
+        (function () {{
+            try {{
+                const resolved = Intl.DateTimeFormat().resolvedOptions();
+                const timezone = resolved.timeZone || "";
+                const locale = resolved.locale || navigator.language || "";
+                if (timezone) {{
+                    document.cookie = "alfred_timezone=" + encodeURIComponent(timezone) + "; Path=/; SameSite=Lax";
+                }}
+                if (locale) {{
+                    document.cookie = "alfred_locale=" + encodeURIComponent(locale) + "; Path=/; SameSite=Lax";
+                }}
+            }} catch (err) {{
+                console.warn("Unable to determine browser timezone", err);
+            }}
+        }})();
+    </script>
 </head>
 <body>
     <div class="container">
@@ -178,6 +217,9 @@ async def gatekeeper_middleware(request: Request, call_next):
     # Check for session token cookie
     token = request.cookies.get("alfred_token")
     refresh_token = request.cookies.get("alfred_refresh_token")
+    expires_at = _parse_int_cookie(request.cookies.get("alfred_token_expires_at"))
+    user_timezone = _read_cookie_text(request.cookies.get("alfred_timezone"))
+    user_locale = _read_cookie_text(request.cookies.get("alfred_locale"))
     if not token:
         logger.info(f"[Gatekeeper] Unauthorized: {request.url.path} → redirecting to /")
         return RedirectResponse(url="/")
@@ -204,6 +246,7 @@ async def gatekeeper_middleware(request: Request, call_next):
                         user_id,
                         token,
                         refresh_token or "",
+                        expires_at=expires_at,
                     )
                     logger.info(
                         "[Gatekeeper] Stored auth tokens for %s/%s via route %s",
@@ -226,6 +269,12 @@ async def gatekeeper_middleware(request: Request, call_next):
                             state_delta[SESSION_ACCESS_TOKEN_KEY] = token
                             if refresh_token:
                                 state_delta[SESSION_REFRESH_TOKEN_KEY] = refresh_token
+                            if expires_at is not None:
+                                state_delta[SESSION_TOKEN_EXPIRES_AT_KEY] = expires_at
+                            if user_timezone:
+                                state_delta[SESSION_TIMEZONE_KEY] = user_timezone
+                            if user_locale:
+                                state_delta[SESSION_LOCALE_KEY] = user_locale
                             payload["state_delta"] = state_delta
                         elif "/sessions" in path:
                             parts = [p for p in path.split("/") if p]
@@ -240,6 +289,12 @@ async def gatekeeper_middleware(request: Request, call_next):
                             state[SESSION_ACCESS_TOKEN_KEY] = token
                             if refresh_token:
                                 state[SESSION_REFRESH_TOKEN_KEY] = refresh_token
+                            if expires_at is not None:
+                                state[SESSION_TOKEN_EXPIRES_AT_KEY] = expires_at
+                            if user_timezone:
+                                state[SESSION_TIMEZONE_KEY] = user_timezone
+                            if user_locale:
+                                state[SESSION_LOCALE_KEY] = user_locale
                             payload["state"] = state
                         if app_name and user_id:
                             store_session_tokens(
@@ -248,6 +303,9 @@ async def gatekeeper_middleware(request: Request, call_next):
                                 token,
                                 refresh_token or "",
                                 session_id=session_id,
+                                expires_at=expires_at,
+                                timezone_name=user_timezone,
+                                locale_name=user_locale,
                             )
                             logger.info(
                                 "[Gatekeeper] Stored auth tokens for %s/%s via %s",
@@ -342,6 +400,15 @@ async def auth_callback(request: Request, response: Response, code: str = None, 
     if not access_token:
         return HTMLResponse(make_login_html(error_msg="No access token in response."))
     refresh_token = token_data.get("refresh_token")
+    user_timezone = _read_cookie_text(request.cookies.get("alfred_timezone"))
+    user_locale = _read_cookie_text(request.cookies.get("alfred_locale"))
+    expires_in = token_data.get("expires_in")
+    expires_at = None
+    try:
+        if expires_in is not None:
+            expires_at = int(time.time()) + int(expires_in)
+    except Exception:
+        expires_at = None
 
     logger.info("[Gatekeeper] OAuth2 access token obtained successfully.")
 
@@ -357,6 +424,33 @@ async def auth_callback(request: Request, response: Response, code: str = None, 
         secure=ENVIRONMENT == "production",
         max_age=3600,  # 1 hour (access tokens typically expire in 1h)
     )
+    if expires_at is not None:
+        redirect.set_cookie(
+            key="alfred_token_expires_at",
+            value=str(expires_at),
+            httponly=True,
+            samesite="lax",
+            secure=ENVIRONMENT == "production",
+            max_age=3600,
+        )
+    if user_timezone:
+        redirect.set_cookie(
+            key="alfred_timezone",
+            value=user_timezone,
+            httponly=False,
+            samesite="lax",
+            secure=ENVIRONMENT == "production",
+            max_age=60 * 60 * 24 * 365,
+        )
+    if user_locale:
+        redirect.set_cookie(
+            key="alfred_locale",
+            value=user_locale,
+            httponly=False,
+            samesite="lax",
+            secure=ENVIRONMENT == "production",
+            max_age=60 * 60 * 24 * 365,
+        )
     if refresh_token:
         redirect.set_cookie(
             key="alfred_refresh_token",
@@ -377,6 +471,9 @@ async def logout():
     redirect = RedirectResponse(url="/", status_code=302)
     redirect.delete_cookie("alfred_token")
     redirect.delete_cookie("alfred_refresh_token")
+    redirect.delete_cookie("alfred_token_expires_at")
+    redirect.delete_cookie("alfred_timezone")
+    redirect.delete_cookie("alfred_locale")
     return redirect
 
 if __name__ == "__main__":

@@ -15,18 +15,15 @@ graph TD
     User([User Prompt]) --> Root[alfred_root: Orchestrator]
     Root --> Logic{Conflict Analysis}
     Logic --> Firestore_Read[(Firestore: households/default)]
-    
-    subgraph Core_Workflow [Sequential Workflow]
-        Work[work_agent: Professional Attache]
-        Home[home_agent: Domestic Manager]
-        Formatter[response_formatter: Persona & Summary]
-    end
-    
-    Root -- Delegates to --> Core_Workflow
+    Root --> WorkFlow[work_flow: Work Pipeline]
+    Root --> HomeFlow[home_flow: Home Pipeline]
+    WorkFlow --> Work[work_agent: Professional Attache]
+    Work --> Format1[output_formatter]
+    HomeFlow --> Home[home_agent: Domestic Manager]
+    Home --> Format2[home_output_formatter]
     Work -- Tools --> Workspace[MCP: Google Workspace Tools]
     Home -- Tools --> Audit[(Firestore: agentActions)]
-    
-    Core_Workflow --> User_Response([Final Polished Response])
+    Root --> User_Response([Final Polished Response])
 ```
 
 ---
@@ -76,9 +73,9 @@ The Alfred Agent implements industry-standard security patterns to protect Maste
 - **Role**: Specialist for Household Coordination.
 - **Responsibility**: Manages errands and domestic logging. Reactive in nature to prevent hallucinations.
 
-### `response_formatter` (The Persona)
-- **Role**: Pure persona layer.
-- **Responsibility**: Summarizes multi-agent outputs into the Alfred Pennyworth voice.
+### `output_formatter` (Final Polisher)
+- **Role**: Separate formatter agent invoked after the specialist finishes.
+- **Responsibility**: The specialist workflows run the formatter as a final pass so their raw output becomes the polished Alfred Pennyworth reply.
 
 ---
 

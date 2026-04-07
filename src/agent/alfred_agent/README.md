@@ -62,20 +62,17 @@ Alfred needs a few "Secret Keys" to function. In this folder, you will find a fi
 MODEL=gemini-2.5-flash
 PROJECT_ID=alfred-492407
 LOCATION=us-central1
-MCP_URL=https://workspace-mcp-181562945855.asia-southeast2.run.app
+MCP_URL=https://workspace-mcp-181562945855.asia-southeast2.run.app/mcp
+GOOGLE_OAUTH_CLIENT_ID=your_google_oauth_client_id
+GOOGLE_OAUTH_CLIENT_SECRET=your_google_oauth_client_secret
+GOOGLE_OAUTH_REDIRECT_URI=http://localhost:8080/auth/callback
 GOOGLE_APPLICATION_CREDENTIALS=C:\path\to\your\credentials.json
-GOOGLE_ACCESS_TOKEN=your_temp_token_here
 ```
 
-### ⚡ How to get your Access Token
+### ⚡ How authentication works
 
-The app now also stores a refresh token during Google sign-in, so it can mint fresh access tokens automatically. If you need to bootstrap the local `.env` file or test the MCP client manually, the `GOOGLE_ACCESS_TOKEN` still expires every hour. To refresh it yourself, open your terminal (Command Prompt or PowerShell) and run:
-
-```powershell
-gcloud auth print-access-token
-```
-
-Copy that code and paste it back into your `.env` file.
+Alfred now uses the Google OAuth browser sign-in flow in `web_login.py` to obtain and refresh user tokens automatically.
+The `GOOGLE_ACCESS_TOKEN` fallback still exists for local debugging, but normal usage should go through the login flow.
 
 ---
 
@@ -101,17 +98,18 @@ Look for any `Agent(` definition in `agent.py` and modify the `instruction` prop
 
 ### Add New Tools (Technological Upgrades)
 
-Alfred uses **MCP (Model Context Protocol)** to talk to the world (Gmail, Calendar, etc.).
+Alfred uses **MCP (Model Context Protocol)** through ADK's `McpToolset` to talk to the world.
 
-- Look for the specialist tool functions in `agent.py`.
-- You can add or remove tools by changing the `tools=[...]` list inside any agent definition.
+- Look for `workspace_toolset` in `agent.py`.
+- The toolset auto-discovers Workspace actions from the MCP server.
+- Google Calendar, Contacts, and Gmail CRUD are available through the same toolset, so you do not need one wrapper per operation.
 
 ### Create a New Specialist (Sub-Agents)
 
 If we need a "Batmobile Repair Specialist" agent:
 
 1. Define a new `Agent` in `agent.py`.
-2. Add it to the `sub_agents` list in `alfred_core_workflow`.
+2. Add it to the `sub_agents` list in `alfred_root`.
 
 ---
 
