@@ -78,6 +78,20 @@ User receives confirmation
 5. User confirms → CareAgent updates Calendar, HomeAgent creates helper task, Gmail draft created
 6. All actions logged to Firestore with timestamp and agent actor
 
+### 2.d. agent test
+simple architecture for agent test
+alfred_root  (contacts tools)
+    └── alfred_core_workflow  (SequentialAgent)
+            ├── work_agent         → add_event, list_events
+            ├── home_agent         → add_event, list_events
+            └── response_formatter → check_conflicts, resolve_conflict, list_notifications
+
+test prompt:
+1. I am Bruce Bruce@gmail.com, I have Martha (Martha@gmail.com) my mother, Thomas (Thomas@gmail.com) my father, and Lucius my business partner (Lucius@gmail.com)
+2. I have a meeting on 2026-04-08 with Lucius at 8pm
+3. I have dinner with family on 2026-04-16 at 6pm, very important
+4. I have a client call on 2026-04-16 at 6pm
+
 ---
 
 ## 3. Opportunities — Differentiation & USP
