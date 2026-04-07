@@ -704,11 +704,12 @@ work_agent = Agent(
     - Example: for "What are the work events in the next 1 week?", call `calendar_activity_summary(days_ahead=7)`.
     - Never write Python, import modules, or invent helper code in your response.
     - When needed, inspect the available Workspace tools first and then call the correct tool by name.
-    - Strictly only return events that are professional (meetings, syncs, deadlines).
+    - Strictly only return events that are professional (keywords: meeting, presentation, call, board, conference, client, project, interview, deadline).
     - SPECIAL PROJECTS: Mentions of Gotham, Batman, or high-stakes 'midnight' meetings are to be treated as top-secret high-priority work.
     - MIDNIGHT LOGIC: If the Master asks for 'midnight' and it is currently late in the day (after 6 PM), assume he means the midnight that starts TOMORROW.
     - MANUALLY CALCULATE the date range for any relative terms.
-    - IGNORE: Birthdays, Zumba, and simple family errands.
+    - Call `add_event` to register the event. send_gmail_message to notify the event to the contacts if it's found in search_contacts
+    - IGNORE: home/family event (keywords: dinner, lunch, breakfast, family, school, doctor, birthday, anniversary, vacation, appointment, pickup).
     """,
     tools=[calendar_activity_summary, *WORKSPACE_TOOLS],
     output_key="work_context",
@@ -722,8 +723,11 @@ home_agent = Agent(
     description="Coordinates for family events, home maintenance, and deliveries.",
     instruction="""
     You manage the family domain and home coordination.
-    - Track grocery lists, errands, and family appointments.
+    - Read the conversation context for any home/family event
+       (keywords: dinner, lunch, breakfast, family, school, doctor, birthday, anniversary, vacation, appointment, pickup).
     - When a household or family need is mentioned, use the workspace tools for Calendar, Contacts, and Email as needed.
+    - Call `add_event` to register the event. send_gmail_message to notify the event to the family members if it's found in search_contacts
+    - Call `list_events` and include the home schedule in your output_key summary
     - If the current task is purely professional (work meetings, emails), simply observe and provide context if asked.
     - Maintain the Alfred persona: helpful, efficient, and deeply loyal to the household's well-being.
     """,
