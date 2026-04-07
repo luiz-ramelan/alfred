@@ -13,13 +13,10 @@ import google.adk.cli.fast_api as adk_fast_api
 from google.adk.cli.fast_api import get_fast_api_app
 from dotenv import load_dotenv
 
-# Make both the package layout and the flat buildpack layout importable.
+# Make the app root importable in both local runs and Cloud Run buildpack builds.
 current_file_dir = os.path.dirname(os.path.abspath(__file__))
-parent_agents_dir = os.path.dirname(current_file_dir)
 if current_file_dir not in sys.path:
     sys.path.insert(0, current_file_dir)
-if parent_agents_dir not in sys.path:
-    sys.path.insert(0, parent_agents_dir)
 
 # Import the token context from the module used by ADK.
 try:
@@ -60,6 +57,8 @@ CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
 PORT = int(os.getenv("PORT", 8080))
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", os.getenv("PROJECT_ID", "alfred-492407"))
+SESSION_URI = f"firestore://{PROJECT_ID}"
 
 # Dynamic redirect URI based on environment
 if ENVIRONMENT == "production":
@@ -210,7 +209,11 @@ logger.info(f"--- ALFRED GATEKEEPER STARTING ON PORT {PORT} ---")
 logger.info(f"Redirect URI: {REDIRECT_URI}")
 
 try:
-    adk_app = get_fast_api_app(agents_dir=parent_agents_dir, web=True)
+    adk_app = get_fast_api_app(
+        agents_dir=current_file_dir,
+        session_service_uri=SESSION_URI,
+        web=True,
+    )
     logger.info("[Gatekeeper] ADK Application initialized successfully.")
 except Exception as e:
     logger.error(f"[Gatekeeper CRITICAL] Failed to initialize ADK app: {e}")
