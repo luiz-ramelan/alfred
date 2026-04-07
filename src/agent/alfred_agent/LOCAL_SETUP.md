@@ -241,4 +241,4 @@ To deploy the custom Alfred login wrapper to Cloud Run, run this from `src/agent
 
 This uses the `Procfile` entry `web: python web_login.py`, so Cloud Run starts the gatekeeper instead of the plain ADK web UI.
 
-The login wrapper now keeps the MCP helper inside `alfred_agent`, so the deploy stays self-contained in this folder.
+The login wrapper now keeps the MCP helper inside `alfred_agent`, and it instantiates the Firestore-backed session service directly in `web_login.py`, so the deploy stays self-contained in this folder.

@@ -279,6 +279,34 @@ def _get_token_record(
     return record
 
 
+def _token_record_from_state(state: Any) -> dict[str, Any]:
+    if not isinstance(state, dict):
+        return {}
+
+    access_token = str(state.get(SESSION_ACCESS_TOKEN_KEY, "")).strip()
+    if not access_token:
+        return {}
+
+    record: dict[str, Any] = {
+        SESSION_ACCESS_TOKEN_KEY: access_token,
+        SESSION_REFRESH_TOKEN_KEY: str(state.get(SESSION_REFRESH_TOKEN_KEY, "")).strip(),
+    }
+
+    expires_at = _normalize_int(state.get(SESSION_TOKEN_EXPIRES_AT_KEY))
+    if expires_at is not None:
+        record[SESSION_TOKEN_EXPIRES_AT_KEY] = expires_at
+
+    timezone_name = str(state.get(SESSION_TIMEZONE_KEY, "")).strip()
+    if timezone_name:
+        record[SESSION_TIMEZONE_KEY] = timezone_name
+
+    locale_name = str(state.get(SESSION_LOCALE_KEY, "")).strip()
+    if locale_name:
+        record[SESSION_LOCALE_KEY] = locale_name
+
+    return record
+
+
 def _resolve_timezone_name(tool_context: ToolContext) -> str:
     invocation_context = getattr(tool_context, "_invocation_context", None)
     session = getattr(invocation_context, "session", None) if invocation_context else None
@@ -351,8 +379,11 @@ class SessionAwareCredentialService(BaseCredentialService):
         user_id = getattr(invocation_context, "user_id", "") if invocation_context else ""
         session = getattr(invocation_context, "session", None) if invocation_context else None
         session_id = getattr(session, "id", "") if session is not None else ""
+        session_state = getattr(session, "state", {}) if session is not None else {}
 
         record = _get_token_record(app_name, user_id, session_id)
+        if not record:
+            record = _token_record_from_state(session_state)
         if not record:
             return None
 
@@ -416,7 +447,10 @@ class SessionAwareMcpToolset(McpToolset):
         session_id = getattr(session, "id", "") if session is not None else ""
         app_name = getattr(invocation_context, "app_name", "")
         user_id = getattr(invocation_context, "user_id", "")
+        session_state = getattr(session, "state", {}) if session is not None else {}
         record = _get_token_record(app_name, user_id, session_id)
+        if not record:
+            record = _token_record_from_state(session_state)
         access_token = str(record.get(SESSION_ACCESS_TOKEN_KEY, "")).strip()
         if not access_token:
             return None
