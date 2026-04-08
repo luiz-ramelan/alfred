@@ -366,6 +366,15 @@ async def gatekeeper_middleware(request: Request, call_next):
                             if user_locale:
                                 state[SESSION_LOCALE_KEY] = user_locale
                             payload["state"] = state
+                        if not app_name:
+                            app_name = ADK_APP_NAME
+                        if not user_id:
+                            user_id = ADK_USER_ID
+                        if path in ["/run", "/run_sse", "/run_live"]:
+                            payload["app_name"] = app_name
+                            payload["user_id"] = user_id
+                            if session_id:
+                                payload["session_id"] = session_id
                         if app_name and user_id:
                             store_session_tokens(
                                 app_name,

@@ -1,4 +1,5 @@
 import functools
+import importlib
 import logging
 import os
 import time
@@ -16,9 +17,10 @@ from google.adk.agents import SequentialAgent
 from google.adk.auth.auth_credential import (
     AuthCredential,
     AuthCredentialTypes,
-    OAuth2Auth,
+    HttpAuth,
+    HttpCredentials,
 )
-from google.adk.auth.auth_schemes import OpenIdConnectWithConfig
+from fastapi.openapi.models import HTTPBearer
 from google.adk.auth.credential_service.base_credential_service import (
     BaseCredentialService,
 )
@@ -44,6 +46,10 @@ SESSION_TOKEN_EXPIRES_AT_KEY = "ALFRED_TOKEN_EXPIRES_AT"
 SESSION_TIMEZONE_KEY = "ALFRED_TIMEZONE"
 SESSION_LOCALE_KEY = "ALFRED_LOCALE"
 SESSION_TOKEN_STORE: dict[str, dict[str, Any]] = {}
+DEFAULT_APP_NAME = os.getenv("ADK_APP_NAME", "alfred_agent")
+DEFAULT_USER_ID = os.getenv("ADK_USER_ID", "user")
+PRODUCTION_APP_ALIAS = os.getenv("ADK_RUNTIME_APP_NAME", "workspace")
+AUTH_TOKEN_ROOT = "adk_auth_tokens"
 GENERIC_CALENDAR_QUERY_WORDS = {
     "a",
     "an",
@@ -97,6 +103,210 @@ def _token_store_key(app_name: str, user_id: str) -> str:
     return f"{app_name}:{user_id}"
 
 
+def _debug_trace(message: str) -> None:
+    print(message, flush=True)
+    logging.warning(message)
+
+
+def _normalize_mcp_schema_tree(schema: Any) -> Any:
+    primitive_types = {
+        "string",
+        "number",
+        "integer",
+        "boolean",
+        "object",
+        "array",
+        "null",
+    }
+
+    if isinstance(schema, list):
+        return [_normalize_mcp_schema_tree(item) for item in schema]
+
+    if isinstance(schema, dict):
+        for branch_key in ("anyOf", "oneOf", "allOf", "not"):
+            if branch_key in schema:
+                branch_value = schema[branch_key]
+                if branch_key == "not":
+                    if isinstance(branch_value, dict):
+                        return {branch_key: _normalize_mcp_schema_tree(branch_value)}
+                    return {branch_key: branch_value}
+                if isinstance(branch_value, list):
+                    return {
+                        branch_key: [
+                            _normalize_mcp_schema_tree(item) for item in branch_value
+                        ]
+                    }
+                return {
+                    branch_key: [_normalize_mcp_schema_tree(branch_value)]
+                }
+
+        normalized: dict[str, Any] = {}
+
+        for key, value in schema.items():
+            if key == "type":
+                if isinstance(value, list):
+                    normalized[key] = [
+                        item if isinstance(item, str) and item in primitive_types else "object"
+                        for item in value
+                    ]
+                elif isinstance(value, str):
+                    normalized[key] = value if value in primitive_types else "object"
+                else:
+                    normalized[key] = "object"
+                continue
+
+            if key in {"properties", "items", "additionalProperties"}:
+                if isinstance(value, dict):
+                    normalized[key] = {
+                        sub_key: _normalize_mcp_schema_tree(sub_value)
+                        for sub_key, sub_value in value.items()
+                    }
+                elif isinstance(value, list):
+                    normalized[key] = [_normalize_mcp_schema_tree(item) for item in value]
+                else:
+                    normalized[key] = value
+                continue
+
+            normalized[key] = value
+
+        if "type" not in normalized or not normalized["type"]:
+            if "properties" in normalized or "required" in normalized:
+                normalized["type"] = "object"
+            elif "items" in normalized:
+                normalized["type"] = "array"
+            elif "anyOf" in normalized or "oneOf" in normalized or "allOf" in normalized:
+                normalized["type"] = "object"
+            else:
+                normalized["type"] = "object"
+
+        return normalized
+
+    if isinstance(schema, str):
+        schema_type = schema.strip().lower()
+        if schema_type in primitive_types:
+            return schema_type
+        return schema
+
+    if isinstance(schema, (int, float, bool)):
+        return schema
+
+    return schema
+
+
+def _install_mcp_schema_normalizer() -> None:
+    try:
+        gemini_schema_util = importlib.import_module(
+            "google.adk.tools._gemini_schema_util"
+        )
+        mcp_tool_module = importlib.import_module(
+            "google.adk.tools.mcp_tool.mcp_tool"
+        )
+        original_to_gemini_schema = gemini_schema_util._to_gemini_schema
+
+        def _patched_to_gemini_schema(openapi_schema: dict[str, Any]):
+            normalized_schema = _normalize_mcp_schema_tree(openapi_schema)
+            return original_to_gemini_schema(normalized_schema)
+
+        gemini_schema_util._to_gemini_schema = _patched_to_gemini_schema
+        mcp_tool_module._to_gemini_schema = _patched_to_gemini_schema
+        _debug_trace("[Config] Installed MCP schema normalizer")
+    except Exception as exc:
+        logging.warning(f"[Config] Could not install MCP schema normalizer: {exc}")
+
+
+def _token_store_key_candidates(app_name: str = "", user_id: str = "") -> list[str]:
+    candidates: list[str] = []
+    for candidate_app in [
+        app_name,
+        DEFAULT_APP_NAME,
+        PRODUCTION_APP_ALIAS,
+    ]:
+        candidate_app = str(candidate_app or "").strip()
+        candidate_user = str(user_id or "").strip()
+        if candidate_app and candidate_user:
+            key = _token_store_key(candidate_app, candidate_user)
+            if key not in candidates:
+                candidates.append(key)
+    return candidates
+
+
+def _auth_token_doc_ref(app_name: str, user_id: str):
+    db = get_db()
+    if db is None:
+        return None
+    return (
+        db.collection(AUTH_TOKEN_ROOT)
+        .document(app_name)
+        .collection("users")
+        .document(user_id)
+        .collection("tokens")
+        .document("current")
+    )
+
+
+def _record_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    record: dict[str, Any] = {}
+    access_token = str(payload.get(SESSION_ACCESS_TOKEN_KEY, "")).strip()
+    if not access_token:
+        return {}
+    record[SESSION_ACCESS_TOKEN_KEY] = access_token
+    refresh_token = str(payload.get(SESSION_REFRESH_TOKEN_KEY, "")).strip()
+    if refresh_token:
+        record[SESSION_REFRESH_TOKEN_KEY] = refresh_token
+    expires_at = _normalize_int(payload.get(SESSION_TOKEN_EXPIRES_AT_KEY))
+    if expires_at is not None:
+        record[SESSION_TOKEN_EXPIRES_AT_KEY] = expires_at
+    timezone_name = str(payload.get(SESSION_TIMEZONE_KEY, "")).strip()
+    if timezone_name:
+        record[SESSION_TIMEZONE_KEY] = timezone_name
+    locale_name = str(payload.get(SESSION_LOCALE_KEY, "")).strip()
+    if locale_name:
+        record[SESSION_LOCALE_KEY] = locale_name
+    return record
+
+
+def _persist_token_record(app_name: str, user_id: str, payload: dict[str, Any]) -> None:
+    if not app_name or not user_id or not payload:
+        return
+    doc_ref = _auth_token_doc_ref(app_name, user_id)
+    if doc_ref is None:
+        return
+    try:
+        doc_ref.set({"payload": payload, "updated_at": time.time()})
+        _debug_trace(f"[Auth] Persisted token record to Firestore app={app_name} user={user_id}")
+    except Exception as exc:
+        _debug_trace(
+            f"[Auth] Failed to persist token record to Firestore app={app_name} user={user_id} err={exc}"
+        )
+
+
+def _load_persisted_token_record(app_name: str, user_id: str) -> dict[str, Any]:
+    if not app_name or not user_id:
+        return {}
+    doc_ref = _auth_token_doc_ref(app_name, user_id)
+    if doc_ref is None:
+        return {}
+    try:
+        doc = doc_ref.get()
+        if not doc.exists:
+            return {}
+        data = doc.to_dict() or {}
+        payload = data.get("payload") or {}
+        if not isinstance(payload, dict):
+            return {}
+        record = _record_from_payload(payload)
+        if record:
+            _debug_trace(
+                f"[Auth] Loaded persisted token record app={app_name} user={user_id} keys={list(record.keys())}"
+            )
+        return record
+    except Exception as exc:
+        _debug_trace(
+            f"[Auth] Failed to load persisted token record app={app_name} user={user_id} err={exc}"
+        )
+        return {}
+
+
 load_dotenv()
 
 # --- Lazy GCP Client Initialization ---
@@ -138,15 +348,7 @@ tz_str = f"{raw_tz[:3]}:{raw_tz[3:]}"  # Convert +0700 to +07:00
 model_name = os.getenv("MODEL")
 MCP_URL = os.getenv("MCP_URL", "").strip('"\'')
 ACCESS_TOKEN = os.getenv("GOOGLE_ACCESS_TOKEN", "").strip('"\'')
-GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip('"\'')
-GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip('"\'')
-GOOGLE_OAUTH_REDIRECT_URI = os.getenv(
-    "GOOGLE_OAUTH_REDIRECT_URI",
-    "http://localhost:8080/auth/callback",
-).strip('"\'')
 
-WORKSPACE_AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
-WORKSPACE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 WORKSPACE_SCOPES = [
     "openid",
     "email",
@@ -272,10 +474,44 @@ def _get_token_record(
     session_id: str = "",
 ) -> dict[str, Any]:
     record: dict[str, Any] = {}
+    tried_keys: list[str] = []
     if app_name and user_id:
-        record = SESSION_TOKEN_STORE.get(_token_store_key(app_name, user_id), {})
+        key = _token_store_key(app_name, user_id)
+        tried_keys.append(key)
+        record = SESSION_TOKEN_STORE.get(key, {})
+    if not record:
+        for key in _token_store_key_candidates(app_name, user_id):
+            if key in tried_keys:
+                continue
+            tried_keys.append(key)
+            record = SESSION_TOKEN_STORE.get(key, {})
+            if record:
+                break
     if not record and session_id:
         record = SESSION_TOKEN_STORE.get(session_id, {})
+    if not record:
+        for key in _token_store_key_candidates(app_name, user_id):
+            try:
+                persisted = _load_persisted_token_record(*key.split(":", 1))
+            except Exception:
+                persisted = {}
+            if persisted:
+                record = persisted
+                SESSION_TOKEN_STORE[key] = dict(persisted)
+                _debug_trace(f"[Auth] Hydrated token record from Firestore key={key}")
+                break
+    if not record:
+        record = SESSION_TOKEN_STORE.get(
+            _token_store_key(DEFAULT_APP_NAME, DEFAULT_USER_ID), {}
+        )
+    if record:
+        _debug_trace(
+            f"[Auth] Token record lookup app={app_name or '<missing>'} user={user_id or '<missing>'} session={session_id or '<missing>'} tried={tried_keys} hit={bool(record)}"
+        )
+    else:
+        _debug_trace(
+            f"[Auth] Token record lookup app={app_name or '<missing>'} user={user_id or '<missing>'} session={session_id or '<missing>'} tried={tried_keys} hit=False"
+        )
     return record
 
 
@@ -352,22 +588,21 @@ def _resolve_access_token(tool_context: ToolContext) -> str:
     return ACCESS_TOKEN
 
 
-def _build_oauth_credential(
+def _build_bearer_credential(
     access_token: str,
     refresh_token: str = "",
     expires_at: Optional[int] = None,
 ) -> AuthCredential:
     return AuthCredential(
-        auth_type=AuthCredentialTypes.OAUTH2,
-        oauth2=OAuth2Auth(
-            client_id=GOOGLE_OAUTH_CLIENT_ID or None,
-            client_secret=GOOGLE_OAUTH_CLIENT_SECRET or None,
-            redirect_uri=GOOGLE_OAUTH_REDIRECT_URI or None,
-            access_token=access_token or None,
-            refresh_token=refresh_token or None,
-            expires_at=expires_at,
+        auth_type=AuthCredentialTypes.HTTP,
+        http=HttpAuth(
+            scheme="bearer",
+            credentials=HttpCredentials(token=access_token or None),
         ),
     )
+
+
+_install_mcp_schema_normalizer()
 
 
 class SessionAwareCredentialService(BaseCredentialService):
@@ -400,7 +635,7 @@ class SessionAwareCredentialService(BaseCredentialService):
             user_id or "<missing>",
             session_id or "<missing>",
         )
-        return _build_oauth_credential(access_token, refresh_token, expires_at)
+        return _build_bearer_credential(access_token, refresh_token, expires_at)
 
     async def save_credential(self, auth_config, callback_context) -> None:
         invocation_context = getattr(callback_context, "_invocation_context", None)
@@ -410,15 +645,24 @@ class SessionAwareCredentialService(BaseCredentialService):
         session_id = getattr(session, "id", "") if session is not None else ""
 
         credential = getattr(auth_config, "exchanged_auth_credential", None)
-        if not credential or not credential.oauth2:
+        if not credential:
             return
 
-        access_token = str(credential.oauth2.access_token or "").strip()
+        access_token = ""
+        refresh_token = ""
+        expires_at = None
+        if credential.http and credential.http.credentials.token:
+            access_token = str(credential.http.credentials.token or "").strip()
+        elif credential.oauth2 and credential.oauth2.access_token:
+            access_token = str(credential.oauth2.access_token or "").strip()
+            refresh_token = str(credential.oauth2.refresh_token or "").strip()
+            expires_at = _normalize_int(credential.oauth2.expires_at)
         if not access_token:
             return
 
-        refresh_token = str(credential.oauth2.refresh_token or "").strip()
-        expires_at = _normalize_int(credential.oauth2.expires_at)
+        if credential.oauth2:
+            refresh_token = str(credential.oauth2.refresh_token or "").strip()
+            expires_at = _normalize_int(credential.oauth2.expires_at)
         store_session_tokens(
             app_name=app_name,
             user_id=user_id,
@@ -440,32 +684,71 @@ class SessionAwareMcpToolset(McpToolset):
 
     def _resolve_headers_from_context(self, readonly_context: Any) -> Optional[dict[str, str]]:
         invocation_context = getattr(readonly_context, "_invocation_context", None)
-        if invocation_context is None:
-            return None
-
-        session = getattr(invocation_context, "session", None)
+        session = getattr(invocation_context, "session", None) if invocation_context else None
         session_id = getattr(session, "id", "") if session is not None else ""
-        app_name = getattr(invocation_context, "app_name", "")
-        user_id = getattr(invocation_context, "user_id", "")
+        app_name = getattr(invocation_context, "app_name", "") if invocation_context else ""
+        user_id = getattr(invocation_context, "user_id", "") if invocation_context else ""
         session_state = getattr(session, "state", {}) if session is not None else {}
-        record = _get_token_record(app_name, user_id, session_id)
+        record: dict[str, Any] = {}
+        if app_name and user_id:
+            record = _get_token_record(app_name, user_id, session_id)
         if not record:
             record = _token_record_from_state(session_state)
+
         access_token = str(record.get(SESSION_ACCESS_TOKEN_KEY, "")).strip()
+        record_source = "store" if record else "none"
         if not access_token:
+            access_token = token_context.get().strip()
+            if access_token:
+                record_source = "token_context"
+        if not access_token:
+            access_token = ACCESS_TOKEN
+            if access_token:
+                record_source = "env"
+        if not access_token:
+            _debug_trace(
+                f"[MCP] No access token available for discovery app={app_name or '<missing>'} user={user_id or '<missing>'} session={session_id or '<missing>'}"
+            )
             return None
-        logging.info(
-            "[MCP] Resolving discovery headers for app=%s user=%s session=%s",
-            app_name or "<missing>",
-            user_id or "<missing>",
-            session_id or "<missing>",
+
+        _debug_trace(
+            "[MCP] Resolving discovery headers for "
+            f"app={app_name or '<missing>'} user={user_id or '<missing>'} session={session_id or '<missing>'} "
+            f"(source={record_source} token_len={len(access_token)} "
+            f"state_token={bool(str((session_state or {}).get(SESSION_ACCESS_TOKEN_KEY, '')).strip())} "
+            f"store_hit={bool(record)})"
         )
         return {"Authorization": f"Bearer {access_token}"}
 
     async def get_tools(self, readonly_context=None):
         headers = self._resolve_headers_from_context(readonly_context)
-        session = await self._mcp_session_manager.create_session(headers=headers)
-        tools_response = await session.list_tools()
+        auth_header_len = len(headers.get("Authorization", "")) if headers else 0
+        _debug_trace(
+            "[MCP] Starting discovery "
+            f"url={MCP_URL} headers_present={bool(headers)} "
+            f"auth_scheme={getattr(getattr(self, '_auth_scheme', None), 'scheme', '<missing>')} "
+            f"auth_header_len={auth_header_len}"
+        )
+        try:
+            _debug_trace(
+                "[MCP] About to create MCP session "
+                f"url={MCP_URL} headers_present={bool(headers)} auth_header_len={auth_header_len}"
+            )
+            session = await self._mcp_session_manager.create_session(headers=headers)
+            _debug_trace(
+                "[MCP] Session created for discovery "
+                f"manager={type(self._mcp_session_manager).__name__} "
+                f"session_id={getattr(session, '_session_id', '<unknown>')}"
+            )
+            tools_response = await session.list_tools()
+        except Exception:
+            logging.exception(
+                "[MCP] Discovery failed url=%s headers_present=%s headers_len=%s",
+                MCP_URL,
+                bool(headers),
+                len(headers.get("Authorization", "")) if headers else 0,
+            )
+            raise
         tools = []
         for tool in tools_response.tools:
             mcp_tool = MCPTool(
@@ -485,17 +768,8 @@ def _build_workspace_toolset() -> Optional[SessionAwareMcpToolset]:
         logging.warning("[Config] MCP_URL is not configured.")
         return None
 
-    if not GOOGLE_OAUTH_CLIENT_ID or not GOOGLE_OAUTH_CLIENT_SECRET:
-        logging.warning(
-            "[Config] Google OAuth client credentials are missing; MCP auth may fail."
-        )
-
-    auth_scheme = OpenIdConnectWithConfig(
-        authorization_endpoint=WORKSPACE_AUTHORIZATION_ENDPOINT,
-        token_endpoint=WORKSPACE_TOKEN_ENDPOINT,
-        scopes=WORKSPACE_SCOPES,
-    )
-    raw_auth_credential = _build_oauth_credential("")
+    auth_scheme = HTTPBearer()
+    raw_auth_credential = _build_bearer_credential("")
 
     return SessionAwareMcpToolset(
         connection_params=StreamableHTTPConnectionParams(url=MCP_URL),
@@ -544,9 +818,27 @@ def store_session_tokens(
     if locale_name:
         payload[SESSION_LOCALE_KEY] = locale_name
 
+    _debug_trace(
+        "[Auth] Storing session tokens "
+        f"app={app_name or '<missing>'} user={user_id or '<missing>'} session={session_id or '<missing>'} "
+        f"access_len={len(access_token)} refresh_present={bool(resolved_refresh_token)} "
+        f"expires_at={resolved_expires_at if resolved_expires_at is not None else '<missing>'} "
+        f"timezone={timezone_name or '<missing>'} locale={locale_name or '<missing>'}"
+    )
     SESSION_TOKEN_STORE[store_key] = payload
+    _persist_token_record(app_name, user_id, payload)
     if session_id:
         SESSION_TOKEN_STORE[session_id] = dict(payload)
+        _debug_trace(
+            f"[Auth] Mirrored session token store by session_id={session_id} store_key={store_key}"
+        )
+
+    alias_keys = [key for key in _token_store_key_candidates(app_name, user_id) if key != store_key]
+    for alias_key in alias_keys:
+        SESSION_TOKEN_STORE[alias_key] = dict(payload)
+        alias_app, alias_user = alias_key.split(":", 1)
+        _persist_token_record(alias_app, alias_user, payload)
+        _debug_trace(f"[Auth] Mirrored session token store by alias_key={alias_key} primary_key={store_key}")
 
 
 async def calendar_activity_summary(
