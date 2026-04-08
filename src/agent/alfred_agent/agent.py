@@ -31,6 +31,7 @@ from google.adk.tools.mcp_tool.mcp_session_manager import (
 )
 from google.adk.tools.tool_context import ToolContext
 from google.cloud import firestore
+from google.genai.types import FunctionDeclaration
 
 from mcp_google_client import MCPGoogleClient
 
@@ -119,40 +120,69 @@ def _normalize_mcp_schema_tree(schema: Any) -> Any:
         "null",
     }
 
+    def _is_null_schema(node: Any) -> bool:
+        return isinstance(node, dict) and str(node.get("type", "")).lower() == "null"
+
+    def _normalize_type_value(value: Any) -> str:
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            return lowered if lowered in primitive_types else "object"
+
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str):
+                    lowered = item.strip().lower()
+                    if lowered in primitive_types and lowered != "null":
+                        return lowered
+            for item in value:
+                if isinstance(item, str):
+                    lowered = item.strip().lower()
+                    if lowered in primitive_types:
+                        return lowered
+            return "object"
+
+        if isinstance(value, dict):
+            nested_type = value.get("type")
+            if nested_type is not None:
+                return _normalize_type_value(nested_type)
+            if "properties" in value:
+                return "object"
+            if "items" in value:
+                return "array"
+            return "object"
+
+        return "object"
+
+    def _pick_branch(branch_value: Any) -> Any:
+        branches = branch_value if isinstance(branch_value, list) else [branch_value]
+        normalized_branches = [_normalize_mcp_schema_tree(item) for item in branches]
+        for branch in normalized_branches:
+            if not _is_null_schema(branch):
+                return branch
+        return normalized_branches[0] if normalized_branches else {}
+
     if isinstance(schema, list):
         return [_normalize_mcp_schema_tree(item) for item in schema]
 
     if isinstance(schema, dict):
-        for branch_key in ("anyOf", "oneOf", "allOf", "not"):
+        for branch_key in ("anyOf", "oneOf", "allOf"):
             if branch_key in schema:
-                branch_value = schema[branch_key]
-                if branch_key == "not":
-                    if isinstance(branch_value, dict):
-                        return {branch_key: _normalize_mcp_schema_tree(branch_value)}
-                    return {branch_key: branch_value}
-                if isinstance(branch_value, list):
-                    return {
-                        branch_key: [
-                            _normalize_mcp_schema_tree(item) for item in branch_value
-                        ]
-                    }
-                return {
-                    branch_key: [_normalize_mcp_schema_tree(branch_value)]
-                }
+                return _pick_branch(schema[branch_key])
+
+        if "not" in schema:
+            branch_value = schema["not"]
+            if isinstance(branch_value, dict):
+                return _normalize_mcp_schema_tree(branch_value)
+            return {}
 
         normalized: dict[str, Any] = {}
 
         for key, value in schema.items():
+            if key in {"anyOf", "oneOf", "allOf", "not"}:
+                continue
+
             if key == "type":
-                if isinstance(value, list):
-                    normalized[key] = [
-                        item if isinstance(item, str) and item in primitive_types else "object"
-                        for item in value
-                    ]
-                elif isinstance(value, str):
-                    normalized[key] = value if value in primitive_types else "object"
-                else:
-                    normalized[key] = "object"
+                normalized[key] = _normalize_type_value(value)
                 continue
 
             if key in {"properties", "items", "additionalProperties"}:
@@ -164,7 +194,28 @@ def _normalize_mcp_schema_tree(schema: Any) -> Any:
                 elif isinstance(value, list):
                     normalized[key] = [_normalize_mcp_schema_tree(item) for item in value]
                 else:
-                    normalized[key] = value
+                    if key == "additionalProperties" and isinstance(value, bool):
+                        normalized[key] = value
+                continue
+
+            if key == "required" and isinstance(value, list):
+                normalized[key] = [str(item) for item in value if isinstance(item, str)]
+                continue
+
+            if key == "enum" and isinstance(value, list):
+                normalized[key] = [
+                    item
+                    for item in value
+                    if isinstance(item, (str, int, float, bool)) or item is None
+                ]
+                continue
+
+            if isinstance(value, dict):
+                normalized[key] = _normalize_mcp_schema_tree(value)
+                continue
+
+            if isinstance(value, list):
+                normalized[key] = [_normalize_mcp_schema_tree(item) for item in value]
                 continue
 
             normalized[key] = value
@@ -174,8 +225,6 @@ def _normalize_mcp_schema_tree(schema: Any) -> Any:
                 normalized["type"] = "object"
             elif "items" in normalized:
                 normalized["type"] = "array"
-            elif "anyOf" in normalized or "oneOf" in normalized or "allOf" in normalized:
-                normalized["type"] = "object"
             else:
                 normalized["type"] = "object"
 
@@ -212,6 +261,33 @@ def _install_mcp_schema_normalizer() -> None:
         _debug_trace("[Config] Installed MCP schema normalizer")
     except Exception as exc:
         logging.warning(f"[Config] Could not install MCP schema normalizer: {exc}")
+
+
+def _install_mcp_native_json_schema_patch() -> None:
+    try:
+        mcp_tool_module = importlib.import_module(
+            "google.adk.tools.mcp_tool.mcp_tool"
+        )
+        original_get_declaration = mcp_tool_module.McpTool._get_declaration
+
+        def _patched_get_declaration(self) -> FunctionDeclaration:
+            schema_dict = getattr(self._mcp_tool, "inputSchema", {}) or {}
+            if isinstance(schema_dict, dict):
+                _debug_trace(
+                    f"[Config] Using native MCP JSON schema for tool={getattr(self, 'name', '<unknown>')}"
+                )
+                return FunctionDeclaration(
+                    name=self.name,
+                    description=self.description,
+                    parameters_json_schema=schema_dict,
+                )
+            return original_get_declaration(self)
+
+        mcp_tool_module.McpTool._get_declaration = _patched_get_declaration
+        mcp_tool_module.MCPTool._get_declaration = _patched_get_declaration
+        _debug_trace("[Config] Installed native MCP JSON schema patch")
+    except Exception as exc:
+        logging.warning(f"[Config] Could not install native MCP JSON schema patch: {exc}")
 
 
 def _token_store_key_candidates(app_name: str = "", user_id: str = "") -> list[str]:
@@ -603,6 +679,7 @@ def _build_bearer_credential(
 
 
 _install_mcp_schema_normalizer()
+_install_mcp_native_json_schema_patch()
 
 
 class SessionAwareCredentialService(BaseCredentialService):
