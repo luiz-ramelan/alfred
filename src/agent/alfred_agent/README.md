@@ -139,6 +139,7 @@ This deploys the ADK web UI rather than the custom login wrapper.
 ### Note on the MCP helper
 
 The MCP helper now lives alongside the agent code in `alfred_agent/mcp_google_client.py`, so the login wrapper deploy no longer depends on `src/mcpRunner`.
+The login wrapper also instantiates its Firestore-backed session service directly in `web_login.py`, which keeps the custom login flow and the ADK UI on the same startup path.
 
 ---
 

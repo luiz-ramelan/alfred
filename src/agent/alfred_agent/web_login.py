@@ -4,16 +4,22 @@ import secrets
 import json
 import sys
 import time
+from pathlib import Path
 from urllib.parse import urlencode
 import requests as http_requests
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 import uvicorn
 import google.adk.cli.fast_api as adk_fast_api
-from google.adk.cli.fast_api import get_fast_api_app
+from google.adk.cli.adk_web_server import AdkWebServer
+from google.adk.cli.utils.agent_loader import AgentLoader
+from google.adk.artifacts.in_memory_artifact_service import InMemoryArtifactService
+from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
 from dotenv import load_dotenv
+from google.adk.evaluation.in_memory_eval_sets_manager import InMemoryEvalSetsManager
+from google.adk.evaluation.local_eval_set_results_manager import LocalEvalSetResultsManager
 
-# Make both the package layout and the flat buildpack layout importable.
+# Make both the app root and the parent agents directory importable.
 current_file_dir = os.path.dirname(os.path.abspath(__file__))
 parent_agents_dir = os.path.dirname(current_file_dir)
 if current_file_dir not in sys.path:
@@ -47,7 +53,7 @@ except ModuleNotFoundError:
         store_session_tokens,
     )
 
-adk_fast_api.InMemoryCredentialService = SessionAwareCredentialService
+from firestore_session_service import FirestoreSessionService
 
 load_dotenv()
 
@@ -60,10 +66,14 @@ CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
 PORT = int(os.getenv("PORT", 8080))
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+PROJECT_ID = os.getenv("PROJECT_ID", os.getenv("GOOGLE_CLOUD_PROJECT", "alfred-492407"))
+ADK_APP_NAME = os.getenv("ALFRED_APP_NAME", "alfred_agent")
+ADK_USER_ID = os.getenv("ALFRED_USER_ID", "user")
+adk_session_service = None
 
 # Dynamic redirect URI based on environment
 if ENVIRONMENT == "production":
-    APP_BASE_URL = os.getenv("APP_BASE_URL", "https://alfredagent-181562945855.asia-southeast1.run.app")
+    APP_BASE_URL = os.getenv("APP_BASE_URL", "https://alfred-agent-181562945855.asia-southeast2.run.app")
 else:
     APP_BASE_URL = f"http://localhost:{PORT}"
 
@@ -92,6 +102,33 @@ def _parse_int_cookie(value: str | None) -> int | None:
 
 def _read_cookie_text(value: str | None) -> str:
     return (value or "").strip()
+
+
+async def _latest_session_redirect_url() -> str:
+    if adk_session_service is None:
+        return "/dev-ui"
+
+    try:
+        sessions_response = await adk_session_service.list_sessions(
+            app_name=ADK_APP_NAME,
+            user_id=ADK_USER_ID,
+        )
+        sessions = getattr(sessions_response, "sessions", []) or []
+        if not sessions:
+            return "/dev-ui"
+
+        latest_session = max(
+            sessions,
+            key=lambda session: getattr(session, "last_update_time", 0) or 0,
+        )
+        session_id = str(getattr(latest_session, "id", "")).strip()
+        if not session_id:
+            return "/dev-ui"
+
+        return f"/dev-ui/?app={ADK_APP_NAME}&session={session_id}"
+    except Exception as e:
+        logger.warning("[Gatekeeper] Could not resolve latest session: %s", e)
+        return "/dev-ui"
 
 # --- HTML Templates ---
 
@@ -210,7 +247,25 @@ logger.info(f"--- ALFRED GATEKEEPER STARTING ON PORT {PORT} ---")
 logger.info(f"Redirect URI: {REDIRECT_URI}")
 
 try:
-    adk_app = get_fast_api_app(agents_dir=parent_agents_dir, web=True)
+    # Keep the login wrapper self-contained, but back sessions with Firestore.
+    adk_session_service = FirestoreSessionService(project=PROJECT_ID)
+    agent_loader = AgentLoader(parent_agents_dir)
+    eval_sets_manager = InMemoryEvalSetsManager()
+    eval_set_results_manager = LocalEvalSetResultsManager(agents_dir=parent_agents_dir)
+    adk_web_server = AdkWebServer(
+        agent_loader=agent_loader,
+        session_service=adk_session_service,
+        memory_service=InMemoryMemoryService(),
+        artifact_service=InMemoryArtifactService(),
+        credential_service=SessionAwareCredentialService(),
+        eval_sets_manager=eval_sets_manager,
+        eval_set_results_manager=eval_set_results_manager,
+        agents_dir=parent_agents_dir,
+    )
+    adk_app = adk_web_server.get_fast_api_app(
+        allow_origins=["*"],
+        web_assets_dir=Path(adk_fast_api.__file__).resolve().parent / "browser",
+    )
     logger.info("[Gatekeeper] ADK Application initialized successfully.")
 except Exception as e:
     logger.error(f"[Gatekeeper CRITICAL] Failed to initialize ADK app: {e}")
@@ -311,6 +366,15 @@ async def gatekeeper_middleware(request: Request, call_next):
                             if user_locale:
                                 state[SESSION_LOCALE_KEY] = user_locale
                             payload["state"] = state
+                        if not app_name:
+                            app_name = ADK_APP_NAME
+                        if not user_id:
+                            user_id = ADK_USER_ID
+                        if path in ["/run", "/run_sse", "/run_live"]:
+                            payload["app_name"] = app_name
+                            payload["user_id"] = user_id
+                            if session_id:
+                                payload["session_id"] = session_id
                         if app_name and user_id:
                             store_session_tokens(
                                 app_name,
@@ -352,7 +416,7 @@ async def gatekeeper_middleware(request: Request, call_next):
 @adk_app.get("/", response_class=HTMLResponse)
 async def login_root(request: Request):
     if request.cookies.get("alfred_token"):
-        return RedirectResponse(url="/dev-ui/")
+        return RedirectResponse(url="/dev-ui")
     return HTMLResponse(make_login_html())
 
 @adk_app.get("/auth/login")
@@ -430,7 +494,7 @@ async def auth_callback(request: Request, response: Response, code: str = None, 
     # Set the access token as the session cookie
     # httponly=True: JS cannot read it (XSS protection)
     # The token is used by DynamicHeaders to authenticate MCP calls
-    redirect = RedirectResponse(url="/dev-ui/", status_code=302)
+    redirect = RedirectResponse(url="/dev-ui", status_code=302)
     redirect.set_cookie(
         key="alfred_token",
         value=access_token,
