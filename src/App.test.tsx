@@ -3,22 +3,22 @@ import userEvent from '@testing-library/user-event';
 import App from './App';
 
 describe('App UI', () => {
-  it('renders the home briefing by default', () => {
+  it('renders the dashboard by default', () => {
     render(<App />);
 
-    expect(screen.getByText(/Good morning\./i)).toBeInTheDocument();
-    expect(screen.getByText(/Here's what needs your attention\./i)).toBeInTheDocument();
+    expect(screen.getByText(/Weekly Dashboard/i)).toBeInTheDocument();
+    expect(screen.getByText(/Onboarding \+ Profiling Agent/i)).toBeInTheDocument();
   });
 
   it('navigates between primary tabs', async () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('button', {name: /Family/i}));
-    expect(screen.getByText(/Household/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', {name: /Contacts/i}));
+    expect(screen.getByText(/Household Members/i)).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', {name: /Alerts/i}));
-    expect(screen.getByText(/Alfred's proactive updates/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', {name: /Profile/i}));
+    expect(screen.getByText(/Profile Settings/i)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', {name: /Alfred/i}));
     expect(screen.getByText(/Always at your service/i)).toBeInTheDocument();

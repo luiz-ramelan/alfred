@@ -6,35 +6,43 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Home, 
+  LayoutDashboard,
   MessageSquare, 
   Users, 
-  Bell, 
+  User,
   Plus, 
   Send, 
-  ChevronRight, 
-  Briefcase, 
-  Heart,
+  Briefcase,
+  Home,
+  CalendarDays,
+  MapPin,
   Clock,
-  AlertCircle
+  Sparkles,
+  PencilLine,
+  Bell,
+  CheckCircle2
 } from 'lucide-react';
 
-// --- Types ---
+type Tab = 'dashboard' | 'chat' | 'contacts' | 'profile';
+type ContactContext = 'work' | 'home';
 
-type Tab = 'home' | 'chat' | 'family' | 'alerts';
-
-interface Task {
+interface EventItem {
   id: string;
   title: string;
+  day: string;
   time: string;
-  domain: 'work' | 'family';
+  context: ContactContext;
+  summary: string;
+  location?: string;
+  relatedContactIds: string[];
 }
 
-interface FamilyMember {
+interface Contact {
   id: string;
   name: string;
-  role: 'Parent' | 'Child' | 'Helper' | 'Spouse';
-  upcomingNeed: string;
+  role: string;
+  context: ContactContext;
+  note?: string;
 }
 
 interface Message {
@@ -44,28 +52,68 @@ interface Message {
   timestamp: Date;
 }
 
-// --- Mock Data ---
+interface UserProfile {
+  name: string;
+  role: string;
+  onboardingNotes: string;
+  defaultContext: ContactContext;
+  onboardingDone: boolean;
+}
 
-const INITIAL_TASKS: Task[] = [
-  { id: '1', title: 'Review Q3 Strategy', time: '10:00 AM', domain: 'work' },
-  { id: '2', title: 'Board Meeting Prep', time: '2:30 PM', domain: 'work' },
-  { id: '3', title: 'School Pick-up', time: '3:30 PM', domain: 'family' },
-  { id: '4', title: 'Grocery Run', time: '5:00 PM', domain: 'family' },
+const INITIAL_CONTACTS: Contact[] = [
+  { id: 'c1', name: 'Eleanor', role: 'Spouse', context: 'home', note: 'Coordinates dinner plans' },
+  { id: 'c2', name: 'Arthur', role: 'Child', context: 'home', note: 'Piano lessons on Tue/Thu' },
+  { id: 'c3', name: 'Maria', role: 'House Helper', context: 'home', note: 'Daily errands and groceries' },
+  { id: 'c4', name: 'Jonah', role: 'Chief of Staff', context: 'work', note: 'Handles board prep' },
 ];
 
-const INITIAL_FAMILY: FamilyMember[] = [
-  { id: '1', name: 'Eleanor', role: 'Spouse', upcomingNeed: 'Anniversary dinner prep' },
-  { id: '2', name: 'Arthur', role: 'Child', upcomingNeed: 'Piano lesson at 4pm' },
-  { id: '3', name: 'Maria', role: 'Helper', upcomingNeed: 'Grocery list update' },
-  { id: '4', name: 'Grandma', role: 'Parent', upcomingNeed: 'Clinic visit Thursday' },
+const INITIAL_EVENTS: EventItem[] = [
+  {
+    id: 'e1',
+    title: 'Q3 Strategy Review',
+    day: 'Mon',
+    time: '10:00 AM',
+    context: 'work',
+    summary: 'Finalize priorities and lock cross-functional owners before Friday.',
+    location: 'Wayne Tower - 12F Board Room',
+    relatedContactIds: ['c4'],
+  },
+  {
+    id: 'e2',
+    title: 'Grandma Clinic Follow-up',
+    day: 'Thu',
+    time: '11:00 AM',
+    context: 'home',
+    summary: 'Share last reports with clinic and confirm transport slot with helper.',
+    location: 'Gotham General',
+    relatedContactIds: ['c3'],
+  },
+  {
+    id: 'e3',
+    title: 'Board Meeting Prep',
+    day: 'Fri',
+    time: '2:30 PM',
+    context: 'work',
+    summary: 'Rehearse narrative and attach risk appendix for directors.',
+    location: 'Virtual',
+    relatedContactIds: ['c4'],
+  },
+  {
+    id: 'e4',
+    title: 'School Pick-up',
+    day: 'Fri',
+    time: '3:30 PM',
+    context: 'home',
+    summary: 'Bring Arthur directly to piano studio after pick-up.',
+    location: 'North Gate Campus',
+    relatedContactIds: ['c2'],
+  },
 ];
 
 const INITIAL_MESSAGES: Message[] = [
-  { id: '1', sender: 'user', text: "Dad's physio clashes with my presentation Thursday.", timestamp: new Date() },
-  { id: '2', sender: 'alfred', text: "I've moved Dad's physio to Friday 9am and notified the helper. Anything else?", timestamp: new Date() },
+  { id: '1', sender: 'user', text: 'Please prioritize all home reminders for Thursday.', timestamp: new Date() },
+  { id: '2', sender: 'alfred', text: 'Done. I flagged home events and drafted reminders for related contacts.', timestamp: new Date() },
 ];
-
-// --- Components ---
 
 const AlfredMonogram = () => (
   <div className="w-8 h-8 rounded-full bg-amber flex items-center justify-center text-white font-serif font-bold text-sm shadow-sm">
@@ -73,71 +121,262 @@ const AlfredMonogram = () => (
   </div>
 );
 
-const SectionHeader = ({ title }: { title: string }) => (
+const SectionHeader = ({ title, right }: { title: string; right?: React.ReactNode }) => (
+  <div className="flex items-center justify-between mb-3">
   <h2 className="text-lg font-serif font-semibold text-charcoal mb-3">{title}</h2>
-);
-
-const TaskCard = ({ task }: { task: Task; key?: string }) => (
-  <motion.div 
-    whileTap={{ scale: 0.98 }}
-    className="bg-white p-4 rounded-2xl shadow-sm mb-3 flex items-center justify-between border border-transparent active:border-amber/20 transition-colors"
-  >
-    <div className="flex items-center gap-3">
-      <div className={`p-2 rounded-xl ${task.domain === 'work' ? 'bg-navy/5 text-navy' : 'bg-amber/5 text-amber'}`}>
-        {task.domain === 'work' ? <Briefcase size={18} /> : <Heart size={18} />}
-      </div>
-      <div>
-        <h3 className="font-medium text-charcoal text-sm">{task.title}</h3>
-        <div className="flex items-center gap-1 text-xs text-charcoal/50 mt-0.5">
-          <Clock size={12} />
-          <span>{task.time}</span>
-        </div>
-      </div>
-    </div>
-    <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-1 rounded-full ${task.domain === 'work' ? 'bg-navy/10 text-navy' : 'bg-amber/10 text-amber'}`}>
-      {task.domain}
-    </span>
-  </motion.div>
-);
-
-// --- Screens ---
-
-const HomeScreen = () => (
-  <div className="p-6 pb-24">
-    <header className="mb-8">
-      <h1 className="text-2xl font-serif font-bold text-charcoal leading-tight">
-        Good morning.<br />
-        <span className="text-amber">Here's what needs your attention.</span>
-      </h1>
-    </header>
-
-    <div className="mb-8">
-      <SectionHeader title="Work" />
-      {INITIAL_TASKS.filter(t => t.domain === 'work').map(task => (
-        <TaskCard key={task.id} task={task} />
-      ))}
-    </div>
-
-    <div>
-      <SectionHeader title="Family" />
-      {INITIAL_TASKS.filter(t => t.domain === 'family').map(task => (
-        <TaskCard key={task.id} task={task} />
-      ))}
-    </div>
-
-    <div className="fixed bottom-24 left-6 right-6">
-      <div className="bg-white/80 backdrop-blur-md border border-amber/10 rounded-full px-5 py-3 shadow-lg flex items-center gap-3">
-        <AlfredMonogram />
-        <input 
-          type="text" 
-          placeholder="Tell Alfred..." 
-          className="flex-1 bg-transparent border-none outline-none text-sm text-charcoal placeholder:text-charcoal/30"
-        />
-        <Send size={18} className="text-amber" />
-      </div>
-    </div>
+    {right}
   </div>
 );
+
+const classifyContext = (role: string, notes: string): ContactContext => {
+  const text = `${role} ${notes}`.toLowerCase();
+  const workWords = ['board', 'meeting', 'client', 'deadline', 'project', 'office', 'presentation'];
+  const homeWords = ['school', 'family', 'home', 'clinic', 'grocery', 'helper', 'child'];
+
+  const workScore = workWords.filter((w) => text.includes(w)).length;
+  const homeScore = homeWords.filter((w) => text.includes(w)).length;
+
+  return workScore > homeScore ? 'work' : 'home';
+};
+
+const EventDetails = ({
+  event,
+  contacts,
+  onReschedule,
+  onRemind,
+}: {
+  event: EventItem | null;
+  contacts: Contact[];
+  onReschedule: (event: EventItem) => void;
+  onRemind: (event: EventItem) => void;
+}) => {
+  if (!event) {
+    return (
+      <div className="bg-charcoal/10 border border-amber/20 rounded-2xl p-5 text-sm text-charcoal/70">
+        Select an event to see summary, related contacts, location, and actions.
+      </div>
+    );
+  }
+
+  const related = contacts.filter((c) => event.relatedContactIds.includes(c.id));
+
+  return (
+    <motion.div
+      key={event.id}
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="bg-charcoal/10 border border-amber/25 rounded-2xl p-5"
+    >
+      <h3 className="font-serif text-lg font-bold text-charcoal mb-2">{event.title}</h3>
+      <p className="text-sm text-charcoal/80 mb-3">{event.summary}</p>
+
+      <div className="space-y-2 mb-4 text-xs text-charcoal/70">
+        <div className="flex items-center gap-2">
+          <CalendarDays size={14} className="text-amber" />
+          <span>{event.day}, {event.time}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <MapPin size={14} className="text-amber" />
+          <span>{event.location || 'No location set yet'}</span>
+        </div>
+      </div>
+
+      <div className="mb-4">
+        <p className="text-[10px] uppercase tracking-widest font-bold text-charcoal/50 mb-2">Related contacts</p>
+        <div className="flex flex-wrap gap-2">
+          {related.map((person) => (
+            <span key={person.id} className="px-3 py-1 rounded-full text-xs bg-white/60 border border-amber/20 text-charcoal">
+              {person.name} · {person.role}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <button
+          onClick={() => onReschedule(event)}
+          className="bg-amber text-white text-sm py-2.5 rounded-xl font-semibold"
+        >
+          Reschedule
+        </button>
+        <button
+          onClick={() => onRemind(event)}
+          className="bg-white/70 border border-amber/20 text-charcoal text-sm py-2.5 rounded-xl font-semibold"
+        >
+          Send reminder
+        </button>
+      </div>
+    </motion.div>
+  );
+};
+
+const OnboardingPanel = ({
+  profile,
+  setProfile,
+}: {
+  profile: UserProfile;
+  setProfile: React.Dispatch<React.SetStateAction<UserProfile>>;
+}) => {
+  const [draftName, setDraftName] = useState(profile.name);
+  const [draftRole, setDraftRole] = useState(profile.role);
+  const [draftNotes, setDraftNotes] = useState(profile.onboardingNotes);
+
+  const runOnboarding = () => {
+    const context = classifyContext(draftRole, draftNotes);
+    setProfile({
+      name: draftName || 'Bruce',
+      role: draftRole || 'Principal',
+      onboardingNotes: draftNotes,
+      defaultContext: context,
+      onboardingDone: true,
+    });
+  };
+
+  return (
+    <div className="bg-charcoal text-white rounded-2xl p-5 mb-6 shadow-lg">
+      <div className="flex items-start gap-3 mb-4">
+        <Sparkles size={18} className="text-amber mt-1" />
+        <div>
+          <h3 className="font-serif text-lg font-bold">Onboarding + Profiling Agent</h3>
+          <p className="text-xs text-white/70 mt-1">
+            Alfred classifies your default context as work or home. You can edit this later in Profile.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <input
+          value={draftName}
+          onChange={(e) => setDraftName(e.target.value)}
+          placeholder="Your name"
+          className="w-full rounded-xl bg-white/10 border border-white/20 px-3 py-2 text-sm outline-none"
+        />
+        <input
+          value={draftRole}
+          onChange={(e) => setDraftRole(e.target.value)}
+          placeholder="Your role"
+          className="w-full rounded-xl bg-white/10 border border-white/20 px-3 py-2 text-sm outline-none"
+        />
+        <textarea
+          value={draftNotes}
+          onChange={(e) => setDraftNotes(e.target.value)}
+          placeholder="Tell Alfred about your typical week"
+          rows={3}
+          className="w-full rounded-xl bg-white/10 border border-white/20 px-3 py-2 text-sm outline-none resize-none"
+        />
+      </div>
+
+      <button
+        onClick={runOnboarding}
+        className="mt-4 w-full bg-amber text-white py-2.5 rounded-xl text-sm font-semibold"
+      >
+        Use AI onboarding
+      </button>
+    </div>
+  );
+};
+
+const DashboardScreen = ({
+  profile,
+  setProfile,
+  events,
+  contacts,
+  selectedEvent,
+  setSelectedEvent,
+  addLog,
+  dashboardInput,
+  setDashboardInput,
+  sendDashboardChat,
+}: {
+  profile: UserProfile;
+  setProfile: React.Dispatch<React.SetStateAction<UserProfile>>;
+  events: EventItem[];
+  contacts: Contact[];
+  selectedEvent: EventItem | null;
+  setSelectedEvent: React.Dispatch<React.SetStateAction<EventItem | null>>;
+  addLog: (msg: string) => void;
+  dashboardInput: string;
+  setDashboardInput: React.Dispatch<React.SetStateAction<string>>;
+  sendDashboardChat: () => void;
+}) => {
+  const weekTotal = events.length;
+  const workCount = events.filter((e) => e.context === 'work').length;
+  const homeCount = events.filter((e) => e.context === 'home').length;
+
+  return (
+    <div className="p-6 pb-28">
+      {!profile.onboardingDone && <OnboardingPanel profile={profile} setProfile={setProfile} />}
+
+      <header className="mb-6">
+        <h1 className="text-2xl font-serif font-bold text-charcoal leading-tight">
+          Weekly Dashboard
+        </h1>
+        <p className="text-sm text-charcoal/60 mt-1">
+          {profile.onboardingDone ? `${profile.name}, default context: ${profile.defaultContext}` : 'Complete onboarding to personalize prioritization.'}
+        </p>
+      </header>
+
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        <div className="bg-charcoal text-white p-3 rounded-2xl">
+          <p className="text-[10px] uppercase tracking-wider text-white/60">This week</p>
+          <p className="text-xl font-bold mt-1">{weekTotal}</p>
+        </div>
+        <div className="bg-navy text-white p-3 rounded-2xl">
+          <p className="text-[10px] uppercase tracking-wider text-white/60">Work</p>
+          <p className="text-xl font-bold mt-1">{workCount}</p>
+        </div>
+        <div className="bg-amber text-white p-3 rounded-2xl">
+          <p className="text-[10px] uppercase tracking-wider text-white/70">Home</p>
+          <p className="text-xl font-bold mt-1">{homeCount}</p>
+        </div>
+      </div>
+
+      <SectionHeader title="Upcoming This Week" />
+      <div className="space-y-3 mb-6">
+        {events.map((event) => (
+          <motion.button
+            key={event.id}
+            whileTap={{ scale: 0.98 }}
+            onClick={() => setSelectedEvent(event)}
+            className="w-full text-left bg-white/70 border border-amber/20 rounded-2xl p-4 shadow-sm"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-charcoal">{event.title}</h3>
+                <p className="text-xs text-charcoal/50 mt-1">{event.day} · {event.time}</p>
+              </div>
+              <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-1 rounded-full ${event.context === 'work' ? 'bg-navy/15 text-navy' : 'bg-amber/20 text-amber'}`}>
+                {event.context}
+              </span>
+            </div>
+          </motion.button>
+        ))}
+      </div>
+
+      <SectionHeader title="Event Page" />
+      <EventDetails
+        event={selectedEvent}
+        contacts={contacts}
+        onReschedule={(event) => addLog(`Rescheduled ${event.title} to next available slot.`)}
+        onRemind={(event) => addLog(`Reminder sent for ${event.title} to related contacts.`)}
+      />
+
+      <SectionHeader title="Quick Chat In Dashboard" />
+      <div className="bg-white/70 border border-amber/20 rounded-2xl p-2 shadow-sm flex items-center gap-2 mt-2">
+        <input
+          value={dashboardInput}
+          onChange={(e) => setDashboardInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && sendDashboardChat()}
+          placeholder="Ask Alfred from dashboard"
+          className="flex-1 bg-transparent border-none outline-none px-3 py-2 text-sm text-charcoal placeholder:text-charcoal/40"
+        />
+        <button onClick={sendDashboardChat} className="bg-amber text-white p-2 rounded-xl">
+          <Send size={17} />
+        </button>
+      </div>
+    </div>
+  );
+};
 
 const ChatScreen = () => {
   const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
@@ -170,7 +409,7 @@ const ChatScreen = () => {
       const alfredMsg: Message = {
         id: (Date.now() + 1).toString(),
         sender: 'alfred',
-        text: "I've noted that down. I'll make sure everything is coordinated perfectly.",
+        text: "Acknowledged. I mapped this to your current priorities and prepared the next action.",
         timestamp: new Date()
       };
       setMessages(prev => [...prev, alfredMsg]);
@@ -180,7 +419,7 @@ const ChatScreen = () => {
 
   return (
     <div className="flex flex-col h-full bg-cream">
-      <header className="p-6 border-b border-amber/10 bg-white/50 backdrop-blur-sm sticky top-0 z-10">
+      <header className="p-6 border-b border-amber/20 bg-charcoal/10 backdrop-blur-sm sticky top-0 z-10">
         <div className="flex items-center gap-3">
           <AlfredMonogram />
           <div>
@@ -203,7 +442,7 @@ const ChatScreen = () => {
               <div className={`p-4 rounded-2xl text-sm leading-relaxed shadow-sm ${
                 msg.sender === 'user' 
                   ? 'bg-navy text-white rounded-tr-none' 
-                  : 'bg-white text-charcoal rounded-tl-none'
+                  : 'bg-white/75 text-charcoal rounded-tl-none'
               }`}>
                 {msg.text}
               </div>
@@ -213,7 +452,7 @@ const ChatScreen = () => {
         {isTyping && (
           <div className="flex justify-start gap-3">
             <AlfredMonogram />
-            <div className="bg-white p-4 rounded-2xl rounded-tl-none shadow-sm flex gap-1">
+            <div className="bg-white/75 p-4 rounded-2xl rounded-tl-none shadow-sm flex gap-1">
               <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1 }} className="w-1.5 h-1.5 bg-amber rounded-full" />
               <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1, delay: 0.2 }} className="w-1.5 h-1.5 bg-amber rounded-full" />
               <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1, delay: 0.4 }} className="w-1.5 h-1.5 bg-amber rounded-full" />
@@ -222,8 +461,8 @@ const ChatScreen = () => {
         )}
       </div>
 
-      <div className="fixed bottom-24 left-6 right-6">
-        <div className="bg-white border border-amber/10 rounded-2xl p-2 shadow-lg flex items-center gap-2 focus-within:ring-1 ring-amber/20 transition-all">
+      <div className="fixed bottom-24 left-1/2 z-40 w-[calc(100%-3rem)] max-w-[342px] -translate-x-1/2">
+        <div className="bg-charcoal/10 border border-amber/20 rounded-2xl p-2 shadow-lg backdrop-blur-md flex items-center gap-2 focus-within:ring-1 ring-amber/20 transition-all">
           <input 
             type="text" 
             value={inputValue}
@@ -245,131 +484,199 @@ const ChatScreen = () => {
   );
 };
 
-const FamilyScreen = () => (
-  <div className="p-6 pb-24">
-    <header className="mb-8 flex justify-between items-end">
-      <div>
-        <h1 className="text-2xl font-serif font-bold text-charcoal">Household</h1>
-        <p className="text-sm text-charcoal/50">Managing 4 members</p>
-      </div>
-      <motion.button 
-        whileTap={{ scale: 0.9 }}
-        className="bg-amber text-white p-2 rounded-full shadow-md"
-      >
-        <Plus size={24} />
-      </motion.button>
-    </header>
+const ContactsScreen = ({
+  contacts,
+  onAdd,
+}: {
+  contacts: Contact[];
+  onAdd: (contact: Omit<Contact, 'id'>) => void;
+}) => {
+  const [name, setName] = useState('');
+  const [role, setRole] = useState('');
+  const [context, setContext] = useState<ContactContext>('home');
 
-    <div className="grid gap-4">
-      {INITIAL_FAMILY.map(member => (
-        <motion.div 
-          key={member.id}
-          whileTap={{ scale: 0.98 }}
-          className="bg-white p-5 rounded-2xl shadow-sm border border-transparent hover:border-amber/10 transition-all"
-        >
-          <div className="flex justify-between items-start mb-3">
+  const submit = () => {
+    if (!name.trim() || !role.trim()) return;
+    onAdd({ name, role, context });
+    setName('');
+    setRole('');
+    setContext('home');
+  };
+
+  return (
+    <div className="p-6 pb-28">
+      <header className="mb-6">
+        <h1 className="text-2xl font-serif font-bold text-charcoal">Household Members</h1>
+        <p className="text-sm text-charcoal/60">Add family or colleague profiles for home/work contacts.</p>
+      </header>
+
+      <div className="bg-white/70 border border-amber/20 rounded-2xl p-4 mb-6">
+        <SectionHeader
+          title="Add Contact"
+          right={
+            <button onClick={submit} className="bg-amber text-white p-2 rounded-xl">
+              <Plus size={16} />
+            </button>
+          }
+        />
+        <div className="space-y-2">
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className="w-full rounded-xl bg-cream/70 border border-amber/20 px-3 py-2 text-sm outline-none" />
+          <input value={role} onChange={(e) => setRole(e.target.value)} placeholder="Role" className="w-full rounded-xl bg-cream/70 border border-amber/20 px-3 py-2 text-sm outline-none" />
+          <div className="flex gap-2">
+            <button onClick={() => setContext('home')} className={`flex-1 py-2 rounded-xl text-sm font-semibold ${context === 'home' ? 'bg-amber text-white' : 'bg-charcoal/10 text-charcoal'}`}>
+              Home
+            </button>
+            <button onClick={() => setContext('work')} className={`flex-1 py-2 rounded-xl text-sm font-semibold ${context === 'work' ? 'bg-navy text-white' : 'bg-charcoal/10 text-charcoal'}`}>
+              Work
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {contacts.map((person) => (
+          <div key={person.id} className="bg-white/70 border border-amber/20 p-4 rounded-2xl flex items-center justify-between">
             <div>
-              <h3 className="font-serif font-bold text-charcoal text-lg">{member.name}</h3>
-              <span className="text-[10px] uppercase tracking-widest font-bold text-amber bg-amber/5 px-2 py-0.5 rounded-full">
-                {member.role}
-              </span>
+              <p className="font-semibold text-charcoal">{person.name}</p>
+              <p className="text-xs text-charcoal/60">{person.role}</p>
             </div>
-            <div className="w-10 h-10 rounded-full bg-cream flex items-center justify-center text-amber">
-              <Users size={20} />
-            </div>
+            <span className={`text-[10px] uppercase tracking-widest font-bold px-2 py-1 rounded-full ${person.context === 'work' ? 'bg-navy/15 text-navy' : 'bg-amber/20 text-amber'}`}>
+              {person.context}
+            </span>
           </div>
-          <div className="flex items-center gap-2 text-xs text-charcoal/60 bg-cream/50 p-3 rounded-xl">
-            <AlertCircle size={14} className="text-amber" />
-            <span>Next: {member.upcomingNeed}</span>
-          </div>
-        </motion.div>
-      ))}
-    </div>
-  </div>
-);
-
-const AlertsScreen = () => (
-  <div className="p-6 pb-24">
-    <header className="mb-8">
-      <h1 className="text-2xl font-serif font-bold text-charcoal">Alerts</h1>
-      <p className="text-sm text-charcoal/50">Alfred's proactive updates</p>
-    </header>
-
-    <motion.div 
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      className="bg-amber/10 border border-amber/20 p-6 rounded-2xl mb-8"
-    >
-      <div className="flex gap-4 mb-4">
-        <div className="bg-amber text-white p-2 rounded-xl h-fit">
-          <AlertCircle size={20} />
-        </div>
-        <div>
-          <h3 className="font-serif font-bold text-charcoal leading-tight mb-1">Schedule Conflict</h3>
-          <p className="text-sm text-charcoal/80 leading-relaxed">
-            Your board meeting clashes with Grandma's clinic on Thursday. Resolve now?
-          </p>
-        </div>
+        ))}
       </div>
-      <div className="flex gap-3">
-        <motion.button 
-          whileTap={{ scale: 0.95 }}
-          className="flex-1 bg-amber text-white py-2.5 rounded-xl text-sm font-bold shadow-sm"
-        >
-          Resolve
-        </motion.button>
-        <motion.button 
-          whileTap={{ scale: 0.95 }}
-          className="flex-1 bg-white text-charcoal py-2.5 rounded-xl text-sm font-bold border border-amber/20"
-        >
-          Later
-        </motion.button>
-      </div>
-    </motion.div>
-
-    <SectionHeader title="Recent Actions" />
-    <div className="space-y-4">
-      {[
-        { action: "Moved Physio Appointment", time: "2h ago", target: "Grandma" },
-        { action: "Updated Grocery List", time: "4h ago", target: "Maria" },
-        { action: "Confirmed School Run", time: "Yesterday", target: "Arthur" },
-      ].map((log, i) => (
-        <div key={i} className="flex items-center justify-between p-4 bg-white rounded-2xl shadow-sm border border-transparent">
-          <div className="flex items-center gap-3">
-            <div className="w-2 h-2 rounded-full bg-amber/30" />
-            <div>
-              <p className="text-sm font-medium text-charcoal">{log.action}</p>
-              <p className="text-[10px] text-charcoal/40 uppercase tracking-wider font-bold">{log.target}</p>
-            </div>
-          </div>
-          <span className="text-xs text-charcoal/30 italic">{log.time}</span>
-        </div>
-      ))}
     </div>
-  </div>
-);
+  );
+};
 
-// --- Main App ---
+const ProfileScreen = ({
+  profile,
+  setProfile,
+  actionLog,
+}: {
+  profile: UserProfile;
+  setProfile: React.Dispatch<React.SetStateAction<UserProfile>>;
+  actionLog: string[];
+}) => {
+  const [name, setName] = useState(profile.name);
+  const [role, setRole] = useState(profile.role);
+  const [notes, setNotes] = useState(profile.onboardingNotes);
+
+  useEffect(() => {
+    setName(profile.name);
+    setRole(profile.role);
+    setNotes(profile.onboardingNotes);
+  }, [profile]);
+
+  const saveProfile = () => {
+    setProfile((prev) => ({
+      ...prev,
+      name,
+      role,
+      onboardingNotes: notes,
+      defaultContext: classifyContext(role, notes),
+      onboardingDone: true,
+    }));
+  };
+
+  return (
+    <div className="p-6 pb-28">
+      <header className="mb-6">
+        <h1 className="text-2xl font-serif font-bold text-charcoal">Profile</h1>
+        <p className="text-sm text-charcoal/60">Editable anytime. Onboarding preferences can be refined later.</p>
+      </header>
+
+      <div className="bg-white/70 border border-amber/20 rounded-2xl p-4 mb-6 space-y-3">
+        <div className="flex items-center gap-2 text-xs uppercase tracking-wider font-bold text-charcoal/50">
+          <PencilLine size={14} /> Profile Settings
+        </div>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className="w-full rounded-xl bg-cream/70 border border-amber/20 px-3 py-2 text-sm outline-none" />
+        <input value={role} onChange={(e) => setRole(e.target.value)} placeholder="Role" className="w-full rounded-xl bg-cream/70 border border-amber/20 px-3 py-2 text-sm outline-none" />
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} placeholder="Preferences and constraints" className="w-full rounded-xl bg-cream/70 border border-amber/20 px-3 py-2 text-sm outline-none resize-none" />
+
+        <div className="flex items-center justify-between bg-charcoal/10 rounded-xl px-3 py-2">
+          <span className="text-xs text-charcoal/70">AI default context</span>
+          <span className={`text-[10px] uppercase tracking-widest font-bold px-2 py-1 rounded-full ${profile.defaultContext === 'work' ? 'bg-navy/15 text-navy' : 'bg-amber/20 text-amber'}`}>
+            {profile.defaultContext}
+          </span>
+        </div>
+
+        <button onClick={saveProfile} className="w-full bg-amber text-white rounded-xl py-2.5 text-sm font-semibold">
+          Save Profile
+        </button>
+      </div>
+
+      <SectionHeader title="Recent Actions" right={<CheckCircle2 size={16} className="text-amber" />} />
+      <div className="space-y-2">
+        {actionLog.length === 0 && <p className="text-xs text-charcoal/50">No actions yet.</p>}
+        {actionLog.map((entry, idx) => (
+          <div key={`${entry}-${idx}`} className="bg-white/70 border border-amber/20 rounded-xl px-3 py-2 text-xs text-charcoal/80">
+            {entry}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('home');
+  const [activeTab, setActiveTab] = useState<Tab>('dashboard');
+  const [profile, setProfile] = useState<UserProfile>({
+    name: 'Bruce',
+    role: 'Principal',
+    onboardingNotes: '',
+    defaultContext: 'work',
+    onboardingDone: false,
+  });
+  const [contacts, setContacts] = useState<Contact[]>(INITIAL_CONTACTS);
+  const [events] = useState<EventItem[]>(INITIAL_EVENTS);
+  const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(INITIAL_EVENTS[0]);
+  const [actionLog, setActionLog] = useState<string[]>([]);
+  const [dashboardInput, setDashboardInput] = useState('');
+
+  const addLog = (entry: string) => {
+    setActionLog((prev) => [`${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${entry}`, ...prev].slice(0, 8));
+  };
+
+  const addContact = (contact: Omit<Contact, 'id'>) => {
+    setContacts((prev) => [...prev, { ...contact, id: `c${Date.now()}` }]);
+    addLog(`Added ${contact.context} contact: ${contact.name}.`);
+  };
+
+  const sendDashboardChat = () => {
+    if (!dashboardInput.trim()) return;
+    addLog(`Chat request sent: ${dashboardInput}`);
+    setDashboardInput('');
+  };
 
   const renderScreen = () => {
     switch (activeTab) {
-      case 'home': return <HomeScreen />;
+      case 'dashboard':
+        return (
+          <DashboardScreen
+            profile={profile}
+            setProfile={setProfile}
+            events={events}
+            contacts={contacts}
+            selectedEvent={selectedEvent}
+            setSelectedEvent={setSelectedEvent}
+            addLog={addLog}
+            dashboardInput={dashboardInput}
+            setDashboardInput={setDashboardInput}
+            sendDashboardChat={sendDashboardChat}
+          />
+        );
       case 'chat': return <ChatScreen />;
-      case 'family': return <FamilyScreen />;
-      case 'alerts': return <AlertsScreen />;
-      default: return <HomeScreen />;
+      case 'contacts': return <ContactsScreen contacts={contacts} onAdd={addContact} />;
+      case 'profile': return <ProfileScreen profile={profile} setProfile={setProfile} actionLog={actionLog} />;
+      default: return null;
     }
   };
 
   return (
     <div className="min-h-screen bg-cream font-sans selection:bg-amber/20 flex justify-center">
-      {/* Mobile Container Emulator */}
-      <div className="w-full max-w-[390px] bg-cream min-h-screen relative shadow-2xl overflow-hidden flex flex-col">
-        
-        {/* Content Area */}
+      <div className="w-full max-w-[390px] bg-cream/90 min-h-screen relative shadow-2xl overflow-hidden flex flex-col border-x border-charcoal/10">
         <main className="flex-1 overflow-y-auto">
           <AnimatePresence mode="wait">
             <motion.div
@@ -385,13 +692,12 @@ export default function App() {
           </AnimatePresence>
         </main>
 
-        {/* Bottom Navigation */}
-        <nav className="fixed bottom-0 w-full max-w-[390px] bg-white/80 backdrop-blur-xl border-t border-amber/10 px-6 py-4 flex justify-between items-center z-50">
+        <nav className="fixed bottom-0 left-1/2 z-50 w-full max-w-[390px] -translate-x-1/2 bg-charcoal/10 backdrop-blur-xl border-t border-amber/20 px-6 py-4 flex justify-between items-center">
           <NavButton 
-            active={activeTab === 'home'} 
-            onClick={() => setActiveTab('home')} 
-            icon={<Home size={22} />} 
-            label="Home" 
+            active={activeTab === 'dashboard'} 
+            onClick={() => setActiveTab('dashboard')} 
+            icon={<LayoutDashboard size={22} />} 
+            label="Dashboard" 
           />
           <NavButton 
             active={activeTab === 'chat'} 
@@ -400,16 +706,16 @@ export default function App() {
             label="Alfred" 
           />
           <NavButton 
-            active={activeTab === 'family'} 
-            onClick={() => setActiveTab('family')} 
+            active={activeTab === 'contacts'} 
+            onClick={() => setActiveTab('contacts')} 
             icon={<Users size={22} />} 
-            label="Family" 
+            label="Contacts" 
           />
           <NavButton 
-            active={activeTab === 'alerts'} 
-            onClick={() => setActiveTab('alerts')} 
-            icon={<Bell size={22} />} 
-            label="Alerts" 
+            active={activeTab === 'profile'} 
+            onClick={() => setActiveTab('profile')} 
+            icon={<User size={22} />} 
+            label="Profile" 
           />
         </nav>
       </div>
