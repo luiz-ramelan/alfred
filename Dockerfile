@@ -5,6 +5,8 @@ WORKDIR /app
 # Accept VITE_ vars as build args so they get embedded by Vite at build time
 ARG VITE_GOOGLE_CLIENT_ID
 ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
+ARG VITE_ALFRED_BASE_URL
+ENV VITE_ALFRED_BASE_URL=$VITE_ALFRED_BASE_URL
 
 COPY package*.json ./
 RUN npm ci

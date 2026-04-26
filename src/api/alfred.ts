@@ -10,7 +10,8 @@
  */
 
 export const ALFRED_BASE_URL =
-  'https://alfredagent-181562945855.asia-southeast1.run.app';
+  (import.meta as unknown as { env: Record<string, string> }).env
+    .VITE_ALFRED_BASE_URL ?? 'https://alfredagent-181562945855.asia-southeast1.run.app';
 
 const APP_NAME = 'alfred_agent';
 
