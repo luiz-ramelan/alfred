@@ -5,14 +5,14 @@
   --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
   --font-serif: "Lora", ui-serif, Georgia, serif;
 
-  --color-cream: #FAF7F2;
-  --color-charcoal: #1C1C1E;
-  --color-amber: #D4A853;
-  --color-navy: #1B2B44;
+  --color-cream: #eae2d5;
+  --color-charcoal: #111316;
+  --color-amber: #c49645;
+  --color-navy: #152335;
 }
 
 body {
-  background-color: var(--color-cream);
+  background: radial-gradient(circle at top, #efe7da 0%, var(--color-cream) 42%, #ddd3c4 100%);
   color: var(--color-charcoal);
   font-family: var(--font-sans);
 }

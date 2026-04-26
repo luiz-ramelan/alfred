@@ -25,8 +25,11 @@ EXPOSE 8080
 
 # Run ADK web server with Firestore session persistence
 # Cloud Run injects PORT env var (default 8000); we must listen on it
+# CORS_ALLOW_ORIGINS should be set to your frontend URL, e.g.
+# https://alfred-frontend-xxxxx-uc.a.run.app
 CMD adk web \
 	--port=${PORT:-8080} \
 	--host=0.0.0.0 \
+	--allow_origins=${CORS_ALLOW_ORIGINS:-http://localhost:3000} \
 	--session_service_uri=firestore://${GOOGLE_CLOUD_PROJECT:-alfred-492407} \
 	"/app/agents"
