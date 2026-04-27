@@ -1079,6 +1079,190 @@ async def calendar_activity_summary(
         await client.close()
 
 
+async def weekly_briefing(
+    tool_context: ToolContext,
+    days_ahead: int = 7,
+    include_gmail: bool = True,
+) -> dict:
+    """Compile a weekly briefing: upcoming calendar events plus optional Gmail unread snapshot."""
+    setup_cloud_logging()
+
+    calendar_result = await calendar_activity_summary(
+        tool_context=tool_context,
+        person="",
+        days_ahead=days_ahead,
+    )
+
+    briefing: dict[str, Any] = {
+        "status": calendar_result.get("status", "ok"),
+        "days_ahead": days_ahead,
+        "include_gmail": include_gmail,
+        "calendar": calendar_result,
+    }
+
+    if not include_gmail:
+        briefing["gmail"] = {"status": "skipped", "message": "Gmail intentionally excluded."}
+        return briefing
+
+    if not MCP_URL:
+        briefing["gmail"] = {"status": "unavailable", "message": "MCP_URL is not configured."}
+        return briefing
+
+    token = _resolve_access_token(tool_context)
+    if not token:
+        briefing["gmail"] = {"status": "unavailable", "message": "No Google access token available."}
+        return briefing
+
+    client = MCPGoogleClient(MCP_URL, token)
+    try:
+        gmail_result = await client.call_tool(
+            "search_gmail_messages",
+            {"query": "is:unread", "max_results": 25},
+        )
+        messages: list[dict[str, Any]] = []
+
+        def walk(value: Any) -> None:
+            if isinstance(value, dict):
+                if value.get("id") and (value.get("subject") or value.get("from") or value.get("snippet")):
+                    messages.append(value)
+                for nested in value.values():
+                    if isinstance(nested, (dict, list)):
+                        walk(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    walk(nested)
+
+        walk(gmail_result)
+
+        previews = []
+        for msg in messages[:5]:
+            sender = str(msg.get("from") or msg.get("sender") or "").strip()
+            subject = str(msg.get("subject") or "(no subject)").strip()
+            previews.append({"from": sender, "subject": subject})
+
+        briefing["gmail"] = {
+            "status": "ok",
+            "unread_count": len(messages),
+            "previews": previews,
+            "raw": gmail_result,
+        }
+    except Exception as exc:
+        logging.exception("[MCP] Failed to fetch Gmail unread snapshot")
+        briefing["gmail"] = {"status": "error", "message": str(exc)}
+    finally:
+        await client.close()
+
+    return briefing
+
+
+def save_onboarding_profile(
+    tool_context: ToolContext,
+    user_intro: str = "",
+    household_members: Optional[list[dict[str, Any]]] = None,
+    household_rules: Optional[list[dict[str, Any]]] = None,
+    work_members: Optional[list[dict[str, Any]]] = None,
+) -> dict:
+    """Merge an onboarding profile into households/default.
+
+    household_members: [{"name": str, "role": str, "notes": str}, ...]
+    household_rules:   [{"name": str, "time": str, "days": [str], "mandatory": bool, "description": str}, ...]
+    work_members:      [{"name": str, "category": "colleague"|"business_partner"|"personnel",
+                         "role": str, "organization": str, "activity": str, "notes": str}, ...]
+    """
+    setup_cloud_logging()
+    db = get_db()
+    if db is None:
+        return {"status": "error", "message": "Firestore unavailable."}
+
+    household_members = household_members or []
+    household_rules = household_rules or []
+    work_members = work_members or []
+
+    household_ref = db.collection("households").document("default")
+    snapshot = household_ref.get()
+    existing = snapshot.to_dict() if snapshot.exists else {}
+
+    # Merge family_members by name (preserve existing string-only entries).
+    existing_members = list(existing.get("family_members", []) or [])
+    existing_member_names = {
+        (m if isinstance(m, str) else str(m.get("name", ""))).strip().lower()
+        for m in existing_members
+    }
+    added_members: list[str] = []
+    for member in household_members:
+        name = str(member.get("name", "")).strip()
+        if not name:
+            continue
+        if name.lower() in existing_member_names:
+            continue
+        existing_members.append(name)
+        existing_member_names.add(name.lower())
+        added_members.append(name)
+
+    # Merge rules by name (replace existing rule with same name).
+    existing_rules = list(existing.get("rules", []) or [])
+    rules_by_name = {
+        str(r.get("name", "")).strip().lower(): idx
+        for idx, r in enumerate(existing_rules)
+        if isinstance(r, dict)
+    }
+    added_rules: list[str] = []
+    for rule in household_rules:
+        name = str(rule.get("name", "")).strip()
+        if not name:
+            continue
+        idx = rules_by_name.get(name.lower())
+        if idx is not None:
+            existing_rules[idx] = rule
+        else:
+            existing_rules.append(rule)
+            rules_by_name[name.lower()] = len(existing_rules) - 1
+        added_rules.append(name)
+
+    # Merge work_contacts by name.
+    existing_contacts = list(existing.get("work_contacts", []) or [])
+    contacts_by_name = {
+        str(c.get("name", "")).strip().lower(): idx
+        for idx, c in enumerate(existing_contacts)
+        if isinstance(c, dict)
+    }
+    added_contacts: list[str] = []
+    for contact in work_members:
+        name = str(contact.get("name", "")).strip()
+        if not name:
+            continue
+        idx = contacts_by_name.get(name.lower())
+        if idx is not None:
+            existing_contacts[idx] = contact
+        else:
+            existing_contacts.append(contact)
+            contacts_by_name[name.lower()] = len(existing_contacts) - 1
+        added_contacts.append(name)
+
+    payload: dict[str, Any] = {
+        "family_members": existing_members,
+        "rules": existing_rules,
+        "work_contacts": existing_contacts,
+        "last_updated": datetime.now(timezone.utc),
+    }
+    if user_intro.strip():
+        payload["master_profile"] = user_intro.strip()
+
+    try:
+        household_ref.set(payload, merge=True)
+    except Exception as exc:
+        logging.exception("[Onboarding] Failed to write profile")
+        return {"status": "error", "message": str(exc)}
+
+    return {
+        "status": "ok",
+        "added_household_members": added_members,
+        "merged_rules": added_rules,
+        "merged_work_contacts": added_contacts,
+        "master_profile_saved": bool(user_intro.strip()),
+    }
+
+
 # --- Initialize State ---
 # Pre-populating to prevent 'Context variable not found' errors
 initial_state = {
@@ -1328,6 +1512,85 @@ output_formatter = Agent(
 )
 
 
+summarizer_agent = Agent(
+    name="summarizer_agent",
+    model=model_name,
+    description="Compiles a 7-day briefing of upcoming calendar events and (optionally) Gmail unread snapshot.",
+    instruction=f"""
+    You are Alfred's briefing specialist.
+    TODAY'S DATE: {today_str} (ISO: {today_iso}) | TIMEZONE: {tz_str}
+
+    ── TASK ──
+    Produce a structured briefing covering the next 7 days by default.
+
+    ── AVAILABLE TOOL ──
+    • weekly_briefing(days_ahead=7, include_gmail=True)
+      → Returns calendar events for the next N days plus, when include_gmail=True,
+        a Gmail unread snapshot (count + up to 5 previews).
+      → If the Master says "calendar only", "skip email", "no gmail", or similar,
+        pass include_gmail=False.
+      → If the Master specifies a different horizon ("next 3 days", "next 14 days"),
+        pass days_ahead accordingly. Default to 7.
+
+    ── OUTPUT RULES ──
+    1. Call weekly_briefing exactly once.
+    2. Store the full result in your output_key (summary_context). Include the raw
+       calendar and gmail blocks plus a short factual digest with counts.
+    3. DO NOT produce a polished narrative. The output_formatter handles voice.
+    4. DO NOT invent events or emails not present in the tool result.
+    5. If gmail.status is "unavailable" or "error", note that — do not fabricate it.
+    """,
+    tools=[weekly_briefing],
+    output_key="summary_context",
+)
+
+
+onboarding_agent = Agent(
+    name="onboarding_agent",
+    model=model_name,
+    description="Conducts a natural-language onboarding interview and persists the Master's household and work profile.",
+    instruction=f"""
+    You are Alfred's onboarding interviewer.
+    TODAY'S DATE: {today_str}
+
+    ── GOAL ──
+    Collect the Master's introduction, household members, household rules, and key
+    work contacts in natural language, then persist them to the household profile.
+
+    ── INTERVIEW FLOW ──
+    1. Ask the Master to introduce himself in his own words (role, preferences,
+       anything Alfred should know). Capture verbatim as user_intro.
+    2. Ask about household members. For each, capture: name, role in the household
+       (son, ward, partner, etc.), and any notes.
+    3. Ask about household rules / routines (e.g. family dinner at 19:00,
+       training schedules, mandatory commitments). For each: name, time, days,
+       mandatory (true/false), description.
+    4. Ask about work contacts. For each, capture: name, category
+       ("colleague" | "business_partner" | "personnel"), role, organization,
+       activity (what they do with the Master), notes.
+    5. Read back a concise summary and ask for confirmation before saving.
+
+    ── TOOL ──
+    • save_onboarding_profile(user_intro, household_members, household_rules, work_members)
+      → Merges into households/default. Existing entries with the same name are
+        updated; new entries are appended. Master's intro is stored as
+        master_profile.
+      → Call this ONCE, only after the Master confirms the summary.
+
+    ── OUTPUT RULES ──
+    1. Store the tool result and the captured profile in your output_key
+       (onboarding_context). The output_formatter delivers the final reply.
+    2. If the Master declines or amends an item, update the captured profile
+       before saving. Do not save partial data without confirmation.
+    3. DO NOT invent details the Master did not provide.
+    4. Required minimum to save: at least one of (household_members,
+       household_rules, work_members) must be non-empty, OR a non-empty user_intro.
+    """,
+    tools=[save_onboarding_profile],
+    output_key="onboarding_context",
+)
+
+
 work_flow = SequentialAgent(
     name="work_flow",
     description="Runs the work specialist and then the output formatter.",
@@ -1340,6 +1603,26 @@ home_flow = SequentialAgent(
     name="home_flow",
     description="Runs the home specialist and then the output formatter.",
     sub_agents=[home_agent, home_output_formatter],
+)
+
+
+summary_output_formatter = output_formatter.clone(update={"name": "summary_output_formatter"})
+
+summary_flow = SequentialAgent(
+    name="summary_flow",
+    description="Runs the weekly briefing specialist and then the output formatter.",
+    sub_agents=[summarizer_agent, summary_output_formatter],
+)
+
+
+onboarding_output_formatter = output_formatter.clone(
+    update={"name": "onboarding_output_formatter"}
+)
+
+onboarding_flow = SequentialAgent(
+    name="onboarding_flow",
+    description="Runs the onboarding interviewer and then the output formatter.",
+    sub_agents=[onboarding_agent, onboarding_output_formatter],
 )
 
 
@@ -1363,9 +1646,15 @@ alfred_root = Agent(
        → delegate to work_flow.
     2. Household / domestic requests (family events, groceries, errands, home)
        → delegate to home_flow.
-    3. Mixed requests → delegate to the dominant-domain workflow first;
+    3. Weekly / upcoming briefing requests ("summarize my week", "what's coming up",
+       "next 7 days", "weekly briefing", "upcoming schedule")
+       → delegate to summary_flow.
+    4. Onboarding / profile setup ("introduce myself", "set up my profile",
+       "onboard me", "register my household", "tell you about my family")
+       → delegate to onboarding_flow.
+    5. Mixed requests → delegate to the dominant-domain workflow first;
        only involve the other if a genuine cross-domain need exists.
-    4. NEVER invoke both workflows for a single-domain request.
+    6. NEVER invoke multiple workflows for a single-domain request.
 
     ── CONFLICT CHECK ──
     Before routing, call assess_household_conflicts(intent=<user request summary>)
@@ -1375,7 +1664,7 @@ alfred_root = Agent(
     "Be present at work. Be present at home. I shall handle the rest."
     """,
     tools=[assess_household_conflicts],
-    sub_agents=[work_flow, home_flow],
+    sub_agents=[work_flow, home_flow, summary_flow, onboarding_flow],
 )
 
 root_agent = alfred_root
