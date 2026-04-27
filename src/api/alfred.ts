@@ -79,7 +79,7 @@ export async function sendToAlfred(
   message: string
 ): Promise<string> {
   const res = await fetch(
-    `${ALFRED_BASE_URL}/apps/${APP_NAME}/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/run`,
+    `${ALFRED_BASE_URL}/apps/${APP_NAME}/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/run/`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
