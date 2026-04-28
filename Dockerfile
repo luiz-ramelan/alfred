@@ -1,5 +1,5 @@
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 
 # Accept VITE_ vars as build args so they get embedded by Vite at build time
@@ -9,7 +9,7 @@ ARG VITE_ALFRED_BASE_URL
 ENV VITE_ALFRED_BASE_URL=$VITE_ALFRED_BASE_URL
 
 COPY package*.json ./
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+RUN if [ -f package-lock.json ]; then npm ci --include=optional --no-audit --no-fund; else npm install --include=optional --no-audit --no-fund; fi
 
 COPY . .
 RUN npm run build
