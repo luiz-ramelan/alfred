@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 import requests as http_requests
 from fastapi import FastAPI, Request, Response, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 import uvicorn
 import google.adk.cli.fast_api as adk_fast_api
 from google.adk.cli.adk_web_server import AdkWebServer
@@ -69,13 +69,14 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 PROJECT_ID = os.getenv("PROJECT_ID", os.getenv("GOOGLE_CLOUD_PROJECT", "alfred-492407"))
 ADK_APP_NAME = os.getenv("ALFRED_APP_NAME", "alfred_agent")
 ADK_USER_ID = os.getenv("ALFRED_USER_ID", "user")
+APP_BASE_URL = os.getenv(
+    "APP_BASE_URL",
+    "https://alfred-agent-181562945855.asia-southeast2.run.app"
+    if ENVIRONMENT == "production"
+    else f"http://localhost:{PORT}",
+)
+CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
 adk_session_service = None
-
-# Dynamic redirect URI based on environment
-if ENVIRONMENT == "production":
-    APP_BASE_URL = os.getenv("APP_BASE_URL", "https://alfred-agent-181562945855.asia-southeast2.run.app")
-else:
-    APP_BASE_URL = f"http://localhost:{PORT}"
 
 REDIRECT_URI = f"{APP_BASE_URL}/auth/callback"
 
@@ -91,6 +92,13 @@ SCOPES = " ".join([
 ])
 
 
+def _parse_allowed_origins(raw_value: str) -> list[str]:
+    value = raw_value.strip()
+    if not value or value == "*":
+        return ["*"]
+    return [origin.strip() for origin in value.split(",") if origin.strip()]
+
+
 def _parse_int_cookie(value: str | None) -> int | None:
     if not value:
         return None
@@ -102,6 +110,16 @@ def _parse_int_cookie(value: str | None) -> int | None:
 
 def _read_cookie_text(value: str | None) -> str:
     return (value or "").strip()
+
+
+def _read_bearer_token(request: Request) -> str:
+    authorization = _read_cookie_text(request.headers.get("authorization"))
+    if not authorization:
+        return ""
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer":
+        return ""
+    return token.strip()
 
 
 async def _latest_session_redirect_url() -> str:
@@ -263,7 +281,7 @@ try:
         agents_dir=parent_agents_dir,
     )
     adk_app = adk_web_server.get_fast_api_app(
-        allow_origins=["*"],
+        allow_origins=_parse_allowed_origins(CORS_ALLOW_ORIGINS),
         web_assets_dir=Path(adk_fast_api.__file__).resolve().parent / "browser",
     )
     logger.info("[Gatekeeper] ADK Application initialized successfully.")
@@ -284,6 +302,9 @@ async def gatekeeper_middleware(request: Request, call_next):
     if request.url.path.startswith("/public/") or request.url.path.startswith("/gatekeeper-assets"):
         return await call_next(request)
 
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     # Check for session token cookie
     token = request.cookies.get("alfred_token")
     refresh_token = request.cookies.get("alfred_refresh_token")
@@ -291,7 +312,11 @@ async def gatekeeper_middleware(request: Request, call_next):
     user_timezone = _read_cookie_text(request.cookies.get("alfred_timezone"))
     user_locale = _read_cookie_text(request.cookies.get("alfred_locale"))
     if not token:
+        token = _read_bearer_token(request)
+    if not token:
         logger.info(f"[Gatekeeper] Unauthorized: {request.url.path} → redirecting to /")
+        if request.url.path.startswith(("/run", "/run_sse", "/run_live", "/apps/")):
+            return JSONResponse(status_code=401, content={"detail": "Authentication required."})
         return RedirectResponse(url="/")
 
     # Inject per-request OAuth2 access token into context
@@ -559,4 +584,11 @@ if __name__ == "__main__":
     logger.info(f"Starting Alfred Gatekeeper")
     logger.info(f"RedirectURI: {REDIRECT_URI}")
     logger.info(f"Serving agents from: {parent_agents_dir}")
-    uvicorn.run(adk_app, host="0.0.0.0", port=PORT, log_level="info")
+    uvicorn.run(
+        adk_app,
+        host="0.0.0.0",
+        port=PORT,
+        log_level="info",
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
