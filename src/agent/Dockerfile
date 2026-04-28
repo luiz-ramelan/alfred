@@ -8,8 +8,6 @@ ENV PATH="/home/myuser/.local/bin:$PATH"
 
 # GCP / Vertex AI env vars
 ENV GOOGLE_GENAI_USE_VERTEXAI=1
-# Trust Cloud Run's X-Forwarded-Proto so Uvicorn generates https:// redirects
-ENV UVICORN_FORWARDED_ALLOW_IPS=*
 
 # Install ADK + agent deps
 COPY --chown=myuser:myuser alfred_agent/requirements.txt /tmp/requirements.txt
@@ -23,9 +21,6 @@ COPY --chown=myuser:myuser firestore_session_service.py /app/agents/firestore_se
 # Copy the agent package
 COPY --chown=myuser:myuser alfred_agent/ /app/agents/alfred_agent/
 
-# Custom startup script (adds ProxyHeadersMiddleware + uvicorn proxy_headers)
-COPY --chown=myuser:myuser run.py /app/run.py
-
 EXPOSE 8080
 
-CMD ["python", "/app/run.py"]
+CMD ["python", "/app/agents/alfred_agent/web_login.py"]
