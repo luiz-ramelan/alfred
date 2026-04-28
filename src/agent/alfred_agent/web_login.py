@@ -69,13 +69,14 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 PROJECT_ID = os.getenv("PROJECT_ID", os.getenv("GOOGLE_CLOUD_PROJECT", "alfred-492407"))
 ADK_APP_NAME = os.getenv("ALFRED_APP_NAME", "alfred_agent")
 ADK_USER_ID = os.getenv("ALFRED_USER_ID", "user")
+APP_BASE_URL = os.getenv(
+    "APP_BASE_URL",
+    "https://alfred-agent-181562945855.asia-southeast2.run.app"
+    if ENVIRONMENT == "production"
+    else f"http://localhost:{PORT}",
+)
+CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
 adk_session_service = None
-
-# Dynamic redirect URI based on environment
-if ENVIRONMENT == "production":
-    APP_BASE_URL = os.getenv("APP_BASE_URL", "https://alfred-agent-181562945855.asia-southeast2.run.app")
-else:
-    APP_BASE_URL = f"http://localhost:{PORT}"
 
 REDIRECT_URI = f"{APP_BASE_URL}/auth/callback"
 
@@ -89,6 +90,13 @@ SCOPES = " ".join([
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/contacts",
 ])
+
+
+def _parse_allowed_origins(raw_value: str) -> list[str]:
+    value = raw_value.strip()
+    if not value or value == "*":
+        return ["*"]
+    return [origin.strip() for origin in value.split(",") if origin.strip()]
 
 
 def _parse_int_cookie(value: str | None) -> int | None:
@@ -263,7 +271,7 @@ try:
         agents_dir=parent_agents_dir,
     )
     adk_app = adk_web_server.get_fast_api_app(
-        allow_origins=["*"],
+        allow_origins=_parse_allowed_origins(CORS_ALLOW_ORIGINS),
         web_assets_dir=Path(adk_fast_api.__file__).resolve().parent / "browser",
     )
     logger.info("[Gatekeeper] ADK Application initialized successfully.")
@@ -559,4 +567,11 @@ if __name__ == "__main__":
     logger.info(f"Starting Alfred Gatekeeper")
     logger.info(f"RedirectURI: {REDIRECT_URI}")
     logger.info(f"Serving agents from: {parent_agents_dir}")
-    uvicorn.run(adk_app, host="0.0.0.0", port=PORT, log_level="info")
+    uvicorn.run(
+        adk_app,
+        host="0.0.0.0",
+        port=PORT,
+        log_level="info",
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
