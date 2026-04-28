@@ -19,7 +19,9 @@ function normalizeHttpsUrl(value: string): string {
 
   try {
     const url = new URL(trimmed);
-    if (url.protocol === 'http:') {
+    // Don't upgrade localhost/127.0.0.1 — local backend runs plain HTTP
+    const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+    if (url.protocol === 'http:' && !isLocal) {
       url.protocol = 'https:';
     }
     return url.toString().replace(/\/$/, '');
@@ -61,10 +63,13 @@ export async function createAlfredSession(
   timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Bangkok'
 ): Promise<string> {
   const res = await fetch(
-    `${ALFRED_BASE_URL}/apps/${APP_NAME}/users/${encodeURIComponent(userId).replace('%40', '@')}/sessions`,
+    `${ALFRED_BASE_URL}/apps/${APP_NAME}/users/${encodeURIComponent(userId).replace('%40', '@')}/sessions/`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`,
+      },
       body: JSON.stringify({
         state: {
           ALFRED_ACCESS_TOKEN: accessToken,
@@ -93,18 +98,21 @@ export async function createAlfredSession(
 export async function sendToAlfred(
   userId: string,
   sessionId: string,
-  message: string
+  message: string,
+  token?: string
 ): Promise<string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(
     `${ALFRED_BASE_URL}/run`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
-        appName: APP_NAME,
-        userId,
-        sessionId,
-        newMessage: {
+        app_name: APP_NAME,
+        user_id: userId,
+        session_id: sessionId,
+        new_message: {
           role: 'user',
           parts: [{ text: message }],
         },
@@ -172,14 +180,26 @@ function extractFinalText(events: ADKRunEvent[]): string {
 
 const FALLBACK_REPLY = 'I am unable to respond at this moment, sir.';
 
+// ─── Sign-out ─────────────────────────────────────────────────────────────────
+
+/**
+ * Clears all locally-stored auth tokens. Call this when the user signs out.
+ */
+export function signOut(): void {
+  localStorage.removeItem('alfred_token');
+  localStorage.removeItem('alfred_email');
+  localStorage.removeItem('alfred_session');
+}
+
 // ─── Google OAuth helpers ─────────────────────────────────────────────────────
 
+// gmail.modify is a restricted scope that causes "Access blocked" for unverified apps.
+// Gmail operations are handled server-side by the backend using its own OAuth token.
 const GOOGLE_SCOPES = [
   'openid',
   'email',
   'profile',
   'https://www.googleapis.com/auth/calendar',
-  'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/contacts',
 ].join(' ');
 
@@ -228,4 +248,126 @@ export async function fetchUserEmail(accessToken: string): Promise<string> {
   if (!res.ok) throw new Error(`Failed to fetch user info: ${res.status}`);
   const data = (await res.json()) as { email?: string };
   return data.email ?? 'user@example.com';
+}
+
+// ─── User profile (email + display name) ─────────────────────────────────────
+
+export async function fetchUserProfile(
+  accessToken: string
+): Promise<{ email: string; name: string }> {
+  const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`Failed to fetch user info: ${res.status}`);
+  const data = (await res.json()) as { email?: string; name?: string };
+  return {
+    email: data.email ?? 'user@example.com',
+    name: data.name ?? '',
+  };
+}
+
+// ─── Google Calendar ──────────────────────────────────────────────────────────
+
+interface GCalEvent {
+  id?: string;
+  summary?: string;
+  start: { dateTime?: string; date?: string };
+  location?: string;
+  description?: string;
+}
+
+export async function fetchCalendarEvents(accessToken: string): Promise<
+  {
+    id: string;
+    title: string;
+    day: string;
+    time: string;
+    context: 'work' | 'home';
+    summary: string;
+    location?: string;
+    relatedContactIds: string[];
+  }[]
+> {
+  const now = new Date();
+  const weekLater = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const params = new URLSearchParams({
+    timeMin: now.toISOString(),
+    timeMax: weekLater.toISOString(),
+    singleEvents: 'true',
+    orderBy: 'startTime',
+    maxResults: '20',
+  });
+  const res = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  if (!res.ok) throw new Error(`Calendar fetch failed: ${res.status}`);
+  const data = (await res.json()) as { items?: GCalEvent[] };
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  return (data.items ?? []).map((ev, i) => {
+    const dt = ev.start.dateTime
+      ? new Date(ev.start.dateTime)
+      : ev.start.date
+      ? new Date(ev.start.date)
+      : new Date();
+    return {
+      id: ev.id ?? `ev-${i}`,
+      title: ev.summary ?? 'Untitled Event',
+      day: dayNames[dt.getDay()],
+      time: ev.start.dateTime
+        ? dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : 'All day',
+      context: 'work' as 'work' | 'home',
+      summary: ev.description ?? ev.summary ?? '',
+      location: ev.location,
+      relatedContactIds: [],
+    };
+  });
+}
+
+// ─── Google Contacts ──────────────────────────────────────────────────────────
+
+interface GPeopleConnection {
+  resourceName?: string;
+  names?: { displayName?: string }[];
+  emailAddresses?: { value?: string }[];
+  organizations?: { title?: string; name?: string }[];
+  biographies?: { value?: string }[];
+}
+
+export async function fetchGoogleContacts(accessToken: string): Promise<
+  {
+    id: string;
+    name: string;
+    role: string;
+    context: 'work' | 'home';
+    gmail?: string;
+    note?: string;
+  }[]
+> {
+  const params = new URLSearchParams({
+    personFields: 'names,emailAddresses,organizations,biographies',
+    pageSize: '50',
+  });
+  const res = await fetch(
+    `https://people.googleapis.com/v1/people/me/connections?${params}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  if (!res.ok) throw new Error(`Contacts fetch failed: ${res.status}`);
+  const data = (await res.json()) as { connections?: GPeopleConnection[] };
+  return (data.connections ?? [])
+    .map((p, i) => {
+      const name = p.names?.[0]?.displayName ?? '';
+      if (!name) return null;
+      const org = p.organizations?.[0];
+      return {
+        id: p.resourceName ?? `contact-${i}`,
+        name,
+        role: org?.title ?? org?.name ?? 'Contact',
+        context: 'work' as 'work' | 'home',
+        gmail: p.emailAddresses?.[0]?.value,
+        note: p.biographies?.[0]?.value,
+      };
+    })
+    .filter((c): c is NonNullable<typeof c> => c !== null);
 }

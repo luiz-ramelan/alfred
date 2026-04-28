@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -23,6 +23,7 @@ import {
   CheckCircle2,
   Focus,
   LogIn,
+  LogOut,
   Loader2,
 } from 'lucide-react';
 import {
@@ -30,7 +31,10 @@ import {
   sendToAlfred,
   startGoogleOAuth,
   parseOAuthFragment,
-  fetchUserEmail,
+  fetchUserProfile,
+  fetchCalendarEvents,
+  fetchGoogleContacts,
+  signOut,
 } from './api/alfred';
 
 type Tab = 'dashboard' | 'chat' | 'contacts' | 'profile';
@@ -79,60 +83,11 @@ interface UserProfile {
   onboardingDone: boolean;
 }
 
-const INITIAL_CONTACTS: Contact[] = [
-  { id: 'c1', name: 'Eleanor', role: 'Spouse', context: 'home', note: 'Coordinates dinner plans' },
-  { id: 'c2', name: 'Arthur', role: 'Child', context: 'home', note: 'Piano lessons on Tue/Thu' },
-  { id: 'c3', name: 'Maria', role: 'House Helper', context: 'home', note: 'Daily errands and groceries' },
-  { id: 'c4', name: 'Jonah', role: 'Chief of Staff', context: 'work', note: 'Handles board prep' },
-];
+const INITIAL_CONTACTS: Contact[] = [];
 
-const INITIAL_EVENTS: EventItem[] = [
-  {
-    id: 'e1',
-    title: 'Q3 Strategy Review',
-    day: 'Mon',
-    time: '10:00 AM',
-    context: 'work',
-    summary: 'Finalize priorities and lock cross-functional owners before Friday.',
-    location: 'Wayne Tower - 12F Board Room',
-    relatedContactIds: ['c4'],
-  },
-  {
-    id: 'e2',
-    title: 'Grandma Clinic Follow-up',
-    day: 'Thu',
-    time: '11:00 AM',
-    context: 'home',
-    summary: 'Share last reports with clinic and confirm transport slot with helper.',
-    location: 'Gotham General',
-    relatedContactIds: ['c3'],
-  },
-  {
-    id: 'e3',
-    title: 'Board Meeting Prep',
-    day: 'Fri',
-    time: '2:30 PM',
-    context: 'work',
-    summary: 'Rehearse narrative and attach risk appendix for directors.',
-    location: 'Virtual',
-    relatedContactIds: ['c4'],
-  },
-  {
-    id: 'e4',
-    title: 'School Pick-up',
-    day: 'Fri',
-    time: '3:30 PM',
-    context: 'home',
-    summary: 'Bring Arthur directly to piano studio after pick-up.',
-    location: 'North Gate Campus',
-    relatedContactIds: ['c2'],
-  },
-];
+const INITIAL_EVENTS: EventItem[] = [];
 
-const INITIAL_MESSAGES: Message[] = [
-  { id: '1', sender: 'user', text: 'Please prioritize all home reminders for Thursday.', timestamp: new Date() },
-  { id: '2', sender: 'alfred', text: 'Done. I flagged home events and drafted reminders for related contacts.', timestamp: new Date() },
-];
+const INITIAL_MESSAGES: Message[] = [];
 
 const AlfredMonogram = () => (
   <div className="w-8 h-8 rounded-full bg-amber flex items-center justify-center text-white font-serif font-bold text-sm shadow-sm">
@@ -268,7 +223,7 @@ const OnboardingPanel = ({
   const runOnboarding = () => {
     const context = classifyContext(draftRole, draftNotes);
     setProfile({
-      name: draftName || 'Bruce',
+      name: draftName || '',
       role: draftRole || 'Principal',
       onboardingNotes: draftNotes,
       defaultContext: context,
@@ -401,7 +356,7 @@ const DashboardScreen = ({
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-semibold text-charcoal">{event.title}</h3>
-                <p className="text-xs text-charcoal/50 mt-1">{event.day} · {event.time}</p>
+                <p className="text-xs text-charcoal/50 mt-1">{event.day} &middot; {event.time}</p>
               </div>
               <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-1 rounded-full ${event.context === 'work' ? 'bg-navy/15 text-navy' : 'bg-amber/20 text-amber'}`}>
                 {event.context}
@@ -467,9 +422,8 @@ const ChatScreen = ({
       id: Date.now().toString(),
       sender: 'user',
       text: inputValue,
-      timestamp: new Date()
+      timestamp: new Date(),
     };
-
     setMessages(prev => [...prev, newUserMsg]);
     setInputValue('');
     setIsTyping(true);
@@ -477,8 +431,8 @@ const ChatScreen = ({
     let replyText = "Acknowledged. I mapped this to your current priorities and prepared the next action.";
     if (callAlfred) {
       try {
-        replyText = await callAlfred(newUserMsg.text);
-      } catch {
+        replyText = await callAlfred(inputValue);
+      } catch (_e) {
         replyText = "I encountered an issue connecting to Alfred. Please check your connection.";
       }
     }
@@ -487,7 +441,7 @@ const ChatScreen = ({
       id: (Date.now() + 1).toString(),
       sender: 'alfred',
       text: replyText,
-      timestamp: new Date()
+      timestamp: new Date(),
     };
     setMessages(prev => [...prev, alfredMsg]);
     setIsTyping(false);
@@ -507,17 +461,17 @@ const ChatScreen = ({
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6 pb-32">
         {messages.map(msg => (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            key={msg.id} 
+            key={msg.id}
             className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             <div className={`max-w-[80%] flex gap-3 ${msg.sender === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
               {msg.sender === 'alfred' && <AlfredMonogram />}
               <div className={`p-4 rounded-2xl text-sm leading-relaxed shadow-sm ${
-                msg.sender === 'user' 
-                  ? 'bg-navy text-white rounded-tr-none' 
+                msg.sender === 'user'
+                  ? 'bg-navy text-white rounded-tr-none'
                   : 'bg-white/75 text-charcoal rounded-tl-none'
               }`}>
                 {msg.text}
@@ -539,15 +493,15 @@ const ChatScreen = ({
 
       <div className="fixed bottom-24 left-1/2 z-40 w-[calc(100%-3rem)] max-w-[342px] -translate-x-1/2">
         <div className="bg-charcoal/10 border border-amber/20 rounded-2xl p-2 shadow-lg backdrop-blur-md flex items-center gap-2 focus-within:ring-1 ring-amber/20 transition-all">
-          <input 
-            type="text" 
+          <input
+            type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="Type a message..." 
+            placeholder="Type a message..."
             className="flex-1 bg-transparent border-none outline-none px-3 py-2 text-sm text-charcoal placeholder:text-charcoal/30"
           />
-          <motion.button 
+          <motion.button
             whileTap={{ scale: 0.9 }}
             onClick={handleSend}
             className="bg-amber text-white p-2 rounded-xl shadow-sm"
@@ -633,10 +587,12 @@ const ProfileScreen = ({
   profile,
   setProfile,
   actionLog,
+  onSignOut,
 }: {
   profile: UserProfile;
   setProfile: React.Dispatch<React.SetStateAction<UserProfile>>;
   actionLog: string[];
+  onSignOut: () => void;
 }) => {
   const [name, setName] = useState(profile.name);
   const [role, setRole] = useState(profile.role);
@@ -683,6 +639,13 @@ const ProfileScreen = ({
 
         <button onClick={saveProfile} className="w-full bg-amber text-white rounded-xl py-2.5 text-sm font-semibold">
           Save Profile
+        </button>
+
+        <button
+          onClick={onSignOut}
+          className="w-full flex items-center justify-center gap-2 bg-red-50 border border-red-200 text-red-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-red-100 transition-colors"
+        >
+          <LogOut size={14} /> Sign Out
         </button>
       </div>
 
@@ -764,7 +727,7 @@ const ConnectBanner = ({
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [profile, setProfile] = useState<UserProfile>({
-    name: 'Bruce',
+    name: '',
     role: 'Principal',
     onboardingNotes: '',
     defaultContext: 'work',
@@ -776,7 +739,7 @@ export default function App() {
   const [actionLog, setActionLog] = useState<string[]>([]);
   const [dashboardInput, setDashboardInput] = useState('');
 
-  // ─── Auth State ─────────────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Auth State Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const [auth, setAuth] = useState<AuthState>(() => ({
     token: localStorage.getItem('alfred_token') ?? '',
     email: localStorage.getItem('alfred_email') ?? '',
@@ -785,13 +748,13 @@ export default function App() {
     error: '',
   }));
 
-  // ─── Alfred action reply state ───────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Alfred action reply state Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const [alfredReply, setAlfredReply] = useState('');
   const [alfredLoading, setAlfredLoading] = useState(false);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardReply, setDashboardReply] = useState('');
 
-  // ─── Parse OAuth fragment on mount ───────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Parse OAuth fragment on mount Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   useEffect(() => {
     const token = parseOAuthFragment();
     if (!token) return;
@@ -799,15 +762,16 @@ export default function App() {
     history.replaceState(null, '', window.location.pathname);
     localStorage.setItem('alfred_token', token);
     setAuth(prev => ({ ...prev, token, sessionId: '', loading: true, error: '' }));
-    fetchUserEmail(token)
-      .then(email => {
-        localStorage.setItem('alfred_email', email);
-        setAuth(prev => ({ ...prev, email, loading: false }));
-      })
-      .catch(() => setAuth(prev => ({ ...prev, loading: false })));
+      fetchUserProfile(token)
+        .then(({ email, name }) => {
+          localStorage.setItem('alfred_email', email);
+          setAuth(prev => ({ ...prev, email, loading: false }));
+          if (name) setProfile(prev => ({ ...prev, name, onboardingDone: true }));
+        })
+        .catch(() => setAuth(prev => ({ ...prev, loading: false })));
   }, []);
 
-  // ─── Create ADK session when token ready but no session ─────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Create ADK session when token ready but no session Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   useEffect(() => {
     if (!auth.token || !auth.email || auth.sessionId || auth.loading) return;
     setAuth(prev => ({ ...prev, loading: true, error: '' }));
@@ -821,15 +785,48 @@ export default function App() {
       });
   }, [auth.token, auth.email, auth.sessionId, auth.loading]);
 
-  // ─── callAlfred helper ───────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ callAlfred helper Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  useEffect(() => {
+    if (!auth.token || !auth.sessionId || auth.loading) return;
+
+    fetchCalendarEvents(auth.token)
+      .then(realEvents => {
+        if (realEvents.length > 0) {
+          const classified = realEvents.map(ev => ({
+            ...ev,
+            context: classifyContext(ev.title, ev.summary),
+          }));
+          setEvents(classified);
+          setSelectedEvent(classified[0]);
+        }
+      })
+      .catch(() => {
+        // Calendar unavailable — events list remains empty.
+      });
+
+    fetchGoogleContacts(auth.token)
+      .then(realContacts => {
+        if (realContacts.length > 0) {
+          const classified = realContacts.map(c => ({
+            ...c,
+            context: classifyContext(c.role, c.note ?? ''),
+          }));
+          setContacts(classified);
+        }
+      })
+      .catch(() => {
+        // Contacts unavailable — list remains empty.
+      });
+  }, [auth.token, auth.sessionId, auth.loading]);
+
   const callAlfred = useCallback(async (msg: string): Promise<string> => {
     if (!auth.sessionId || !auth.email) {
       return "Please connect your Google account first to use Alfred's live features.";
     }
-    return sendToAlfred(auth.email, auth.sessionId, msg);
-  }, [auth.email, auth.sessionId]);
+    return sendToAlfred(auth.email, auth.sessionId, msg, auth.token || undefined);
+  }, [auth.email, auth.sessionId, auth.token]);
 
-  // ─── Logging ─────────────────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Logging Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const addLog = (entry: string) => {
     setActionLog((prev) => [`${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${entry}`, ...prev].slice(0, 8));
   };
@@ -839,7 +836,7 @@ export default function App() {
     addLog(`Added ${contact.context} contact: ${contact.name}.`);
   };
 
-  // ─── Event action handlers ────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Event action handlers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const handleReschedule = async (event: EventItem) => {
     addLog(`Requesting reschedule for ${event.title}…`);
     setAlfredReply('');
@@ -906,7 +903,7 @@ export default function App() {
     setDashboardLoading(false);
   };
 
-  // ─── Auth connect/disconnect helpers ─────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Auth connect/disconnect helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const handleConnect = () => {
     try {
       startGoogleOAuth();
@@ -919,15 +916,25 @@ export default function App() {
     localStorage.setItem('alfred_token', token);
     localStorage.removeItem('alfred_session');
     setAuth({ token, email: '', sessionId: '', loading: true, error: '' });
-    fetchUserEmail(token)
-      .then(email => {
-        localStorage.setItem('alfred_email', email);
-        setAuth(prev => ({ ...prev, email, loading: false }));
-      })
-      .catch(() => setAuth(prev => ({ ...prev, email: 'user@gmail.com', loading: false })));
+      fetchUserProfile(token)
+        .then(({ email, name }) => {
+          localStorage.setItem('alfred_email', email);
+          setAuth(prev => ({ ...prev, email, loading: false }));
+          if (name) setProfile(prev => ({ ...prev, name, onboardingDone: true }));
+        })
+        .catch(() => setAuth(prev => ({ ...prev, email: 'user@gmail.com', loading: false })));
   };
 
-  // ─── Render helpers ───────────────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Render helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  const handleSignOut = () => {
+    signOut();
+    setAuth({ token: '', email: '', sessionId: '', loading: false, error: '' });
+    setEvents([]);
+    setContacts([]);
+    setSelectedEvent(null);
+    setProfile({ name: '', role: 'Principal', onboardingNotes: '', defaultContext: 'work', onboardingDone: false });
+  };
+
   const renderScreen = () => {
     switch (activeTab) {
       case 'dashboard':
@@ -954,7 +961,7 @@ export default function App() {
         );
       case 'chat': return <ChatScreen callAlfred={callAlfred} />;
       case 'contacts': return <ContactsScreen contacts={contacts} onAdd={addContact} />;
-      case 'profile': return <ProfileScreen profile={profile} setProfile={setProfile} actionLog={actionLog} />;
+      case 'profile': return <ProfileScreen profile={profile} setProfile={setProfile} actionLog={actionLog} onSignOut={handleSignOut} />;
       default: return null;
     }
   };
@@ -1020,3 +1027,4 @@ const NavButton = ({ active, onClick, icon, label }: { active: boolean, onClick:
     </span>
   </button>
 );
+

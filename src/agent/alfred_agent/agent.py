@@ -488,7 +488,7 @@ today_iso = now.strftime("%Y-%m-%d")
 raw_tz = now.strftime("%z")
 tz_str = f"{raw_tz[:3]}:{raw_tz[3:]}"  # Convert +0700 to +07:00
 
-model_name = os.getenv("MODEL")
+model_name = os.getenv("MODEL", "gemini-2.0-flash")
 MCP_URL = os.getenv("MCP_URL", "").strip('"\'')
 ACCESS_TOKEN = os.getenv("GOOGLE_ACCESS_TOKEN", "").strip('"\'')
 
