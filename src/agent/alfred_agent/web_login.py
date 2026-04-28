@@ -292,9 +292,29 @@ except Exception as e:
 # Remove the default ADK root redirect so our login page takes over
 adk_app.router.routes = [r for r in adk_app.router.routes if r.path != "/"]
 
+# Ensure CORS headers are present even on unhandled 500 responses.
+# FastAPI's internal error handler can bypass CORSMiddleware, so we patch it here.
+@adk_app.exception_handler(Exception)
+async def _cors_safe_exception_handler(request: Request, exc: Exception):
+    import traceback
+    logger.error("[Gatekeeper] Unhandled exception on %s: %s", request.url.path, traceback.format_exc())
+    origin = request.headers.get("origin", "*")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc)},
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+        },
+    )
+
 # --- Gatekeeper Middleware ---
 @adk_app.middleware("http")
 async def gatekeeper_middleware(request: Request, call_next):
+    # CORS preflight — must pass through before auth check so CORSMiddleware can respond
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     # Public auth routes — always pass through
     if request.url.path in ["/", "/auth/login", "/auth/callback", "/favicon.ico"]:
         return await call_next(request)
@@ -307,6 +327,10 @@ async def gatekeeper_middleware(request: Request, call_next):
 
     # Check for session token cookie
     token = request.cookies.get("alfred_token")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
     refresh_token = request.cookies.get("alfred_refresh_token")
     expires_at = _parse_int_cookie(request.cookies.get("alfred_token_expires_at"))
     user_timezone = _read_cookie_text(request.cookies.get("alfred_timezone"))
