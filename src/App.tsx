@@ -90,6 +90,9 @@ const INITIAL_EVENTS: EventItem[] = [];
 
 const INITIAL_MESSAGES: Message[] = [];
 
+const PROFILE_STORAGE_KEY = 'alfred_profile';
+const CHAT_STORAGE_KEY = 'alfred_chat_messages';
+
 const AlfredMonogram = () => (
   <div className="w-8 h-8 rounded-full bg-amber flex items-center justify-center text-white font-serif font-bold text-sm shadow-sm">
     A
@@ -401,13 +404,16 @@ const DashboardScreen = ({
 };
 
 const ChatScreen = ({
+  messages,
+  setMessages,
   callAlfred,
   debugMode,
 }: {
+  messages: Message[];
+  setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
   callAlfred?: (msg: string) => Promise<{ text: string; thought?: string }>;
   debugMode?: boolean;
 }) => {
-  const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -742,18 +748,48 @@ const ConnectBanner = ({
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [debugMode] = useState(() => new URLSearchParams(window.location.search).has('debug'));
-  const [profile, setProfile] = useState<UserProfile>({
-    name: '',
-    role: 'Principal',
-    onboardingNotes: '',
-    defaultContext: 'work',
-    onboardingDone: false,
+  const [profile, setProfile] = useState<UserProfile>(() => {
+    try {
+      const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw) as Partial<UserProfile>;
+        return {
+          name: saved.name ?? '',
+          role: saved.role ?? 'Principal',
+          onboardingNotes: saved.onboardingNotes ?? '',
+          defaultContext: saved.defaultContext === 'home' ? 'home' : 'work',
+          onboardingDone: Boolean(saved.onboardingDone),
+        };
+      }
+    } catch {
+      // Ignore malformed local profile cache.
+    }
+    return {
+      name: '',
+      role: 'Principal',
+      onboardingNotes: '',
+      defaultContext: 'work',
+      onboardingDone: false,
+    };
   });
   const [contacts, setContacts] = useState<Contact[]>(INITIAL_CONTACTS);
   const [events, setEvents] = useState<EventItem[]>(INITIAL_EVENTS);
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(INITIAL_EVENTS[0]);
   const [actionLog, setActionLog] = useState<string[]>([]);
   const [dashboardInput, setDashboardInput] = useState('');
+  const [chatMessages, setChatMessages] = useState<Message[]>(() => {
+    try {
+      const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+      if (!raw) return INITIAL_MESSAGES;
+      const parsed = JSON.parse(raw) as Array<Omit<Message, 'timestamp'> & { timestamp: string }>;
+      return parsed.map((msg) => ({
+        ...msg,
+        timestamp: new Date(msg.timestamp),
+      }));
+    } catch {
+      return INITIAL_MESSAGES;
+    }
+  });
 
   // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Auth State Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const [auth, setAuth] = useState<AuthState>(() => ({
@@ -801,6 +837,18 @@ export default function App() {
       });
   }, [auth.token, auth.email, auth.sessionId, auth.loading]);
 
+  useEffect(() => {
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile));
+  }, [profile]);
+
+  useEffect(() => {
+    const serializable = chatMessages.map((msg) => ({
+      ...msg,
+      timestamp: msg.timestamp.toISOString(),
+    }));
+    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(serializable));
+  }, [chatMessages]);
+
   // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ callAlfred helper Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   useEffect(() => {
     if (!auth.token || !auth.sessionId || auth.loading) return;
@@ -836,11 +884,38 @@ export default function App() {
   }, [auth.token, auth.sessionId, auth.loading]);
 
   const callAlfred = useCallback(async (msg: string): Promise<{ text: string; thought?: string }> => {
-    if (!auth.sessionId || !auth.email || !auth.token) {
+    if (!auth.email || !auth.token) {
       return { text: "Please connect your Google account first to use Alfred's live features." };
     }
-    return sendToAlfred(auth.email, auth.sessionId, auth.token, msg);
-  }, [auth.email, auth.sessionId, auth.token]);
+
+    let sessionId = auth.sessionId;
+    if (!sessionId) {
+      sessionId = await createAlfredSession(auth.email, auth.token);
+      localStorage.setItem('alfred_session', sessionId);
+      setAuth((prev) => ({ ...prev, sessionId }));
+    }
+
+    const enrichedMessage = [
+      `Principal Profile: name=${profile.name || 'Unknown'}, role=${profile.role || 'Principal'}, default_context=${profile.defaultContext}.`,
+      profile.onboardingNotes ? `Principal Notes: ${profile.onboardingNotes}` : '',
+      `User Request: ${msg}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    try {
+      return await sendToAlfred(auth.email, sessionId, auth.token, enrichedMessage);
+    } catch (error) {
+      const message = String(error);
+      if (!message.includes('(404)')) {
+        throw error;
+      }
+      const newSessionId = await createAlfredSession(auth.email, auth.token);
+      localStorage.setItem('alfred_session', newSessionId);
+      setAuth((prev) => ({ ...prev, sessionId: newSessionId }));
+      return sendToAlfred(auth.email, newSessionId, auth.token, enrichedMessage);
+    }
+  }, [auth.email, auth.sessionId, auth.token, profile.defaultContext, profile.name, profile.onboardingNotes, profile.role]);
 
   // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Logging Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const addLog = (entry: string) => {
@@ -944,7 +1019,10 @@ export default function App() {
   // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Render helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const handleSignOut = () => {
     signOut();
+    localStorage.removeItem(PROFILE_STORAGE_KEY);
+    localStorage.removeItem(CHAT_STORAGE_KEY);
     setAuth({ token: '', email: '', sessionId: '', loading: false, error: '' });
+    setChatMessages([]);
     setEvents([]);
     setContacts([]);
     setSelectedEvent(null);
@@ -975,7 +1053,15 @@ export default function App() {
             dashboardReply={dashboardReply}
           />
         );
-      case 'chat': return <ChatScreen callAlfred={callAlfred} debugMode={debugMode} />;
+      case 'chat':
+        return (
+          <ChatScreen
+            messages={chatMessages}
+            setMessages={setChatMessages}
+            callAlfred={callAlfred}
+            debugMode={debugMode}
+          />
+        );
       case 'contacts': return <ContactsScreen contacts={contacts} onAdd={addContact} />;
       case 'profile': return <ProfileScreen profile={profile} setProfile={setProfile} actionLog={actionLog} onSignOut={handleSignOut} />;
       default: return null;
