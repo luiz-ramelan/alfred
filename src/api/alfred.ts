@@ -98,6 +98,10 @@ export interface AlfredResponse {
   thought?: string;
 }
 
+export interface AlfredStateDelta {
+  [key: string]: string | number | boolean | null;
+}
+
 /**
  * Sends a natural-language message to Alfred and returns the reply + thought.
  */
@@ -105,8 +109,29 @@ export async function sendToAlfred(
   userId: string,
   sessionId: string,
   accessToken: string,
-  message: string
+  message: string,
+  stateDelta?: AlfredStateDelta
 ): Promise<AlfredResponse> {
+  const payload: {
+    app_name: string;
+    user_id: string;
+    session_id: string;
+    new_message: { role: 'user'; parts: Array<{ text: string }> };
+    state_delta?: AlfredStateDelta;
+  } = {
+    app_name: APP_NAME,
+    user_id: userId,
+    session_id: sessionId,
+    new_message: {
+      role: 'user',
+      parts: [{ text: message }],
+    },
+  };
+
+  if (stateDelta && Object.keys(stateDelta).length > 0) {
+    payload.state_delta = stateDelta;
+  }
+
   const res = await fetch(
     `${ALFRED_BASE_URL}/run`,
     {
@@ -115,15 +140,7 @@ export async function sendToAlfred(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({
-        app_name: APP_NAME,
-        user_id: userId,
-        session_id: sessionId,
-        new_message: {
-          role: 'user',
-          parts: [{ text: message }],
-        },
-      }),
+      body: JSON.stringify(payload),
     }
   );
 
@@ -294,6 +311,41 @@ interface GCalEvent {
   description?: string;
 }
 
+function cleanCalendarSummary(raw: string): string {
+  if (!raw.trim()) return '';
+
+  let text = raw;
+
+  // Remove HTML tags first to avoid rendering noisy markup.
+  text = text.replace(/<[^>]*>/g, ' ');
+
+  // Decode common HTML entities in browser-safe way.
+  try {
+    const parser = new DOMParser();
+    text = parser.parseFromString(text, 'text/html').documentElement.textContent ?? text;
+  } catch {
+    // Fallback: keep existing text if parsing fails.
+  }
+
+  // Remove URLs and long token-like blobs that often come from rich invites.
+  text = text
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/\b[A-Za-z0-9+/_=-]{30,}\b/g, ' ');
+
+  // Drop common ICS/calendar metadata lines.
+  const metadataLine = /^(BEGIN:|END:|DTSTART|DTEND|UID:|ATTENDEE|ORGANIZER|SEQUENCE:|STATUS:|TRANSP:|CLASS:|CREATED:|LAST-MODIFIED:|RRULE:|METHOD:|PRODID:|VERSION:|X-)/i;
+  text = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !metadataLine.test(line))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!text) return '';
+  return text.slice(0, 140);
+}
+
 export async function fetchCalendarEvents(accessToken: string): Promise<
   {
     id: string;
@@ -328,6 +380,9 @@ export async function fetchCalendarEvents(accessToken: string): Promise<
       : ev.start.date
       ? new Date(ev.start.date)
       : new Date();
+    const cleanedDescription = cleanCalendarSummary(ev.description ?? '');
+    const cleanedTitle = cleanCalendarSummary(ev.summary ?? '');
+
     return {
       id: ev.id ?? `ev-${i}`,
       title: ev.summary ?? 'Untitled Event',
@@ -336,7 +391,7 @@ export async function fetchCalendarEvents(accessToken: string): Promise<
         ? dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         : 'All day',
       context: 'work' as 'work' | 'home',
-      summary: ev.description ?? ev.summary ?? '',
+      summary: cleanedDescription || cleanedTitle,
       location: ev.location,
       relatedContactIds: [],
     };

@@ -1,22 +1,51 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Lora:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Alegreya+Sans:wght@400;500;700;800&family=Alegreya:wght@500;600;700;800&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Lora", ui-serif, Georgia, serif;
+  --font-sans: "Alegreya Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Alegreya", ui-serif, Georgia, serif;
 
-  --color-cream: #eae2d5;
-  --color-charcoal: #111316;
-  --color-amber: #c49645;
-  --color-navy: #152335;
+  --color-cream: #e9edf2;
+  --color-charcoal: #14181f;
+  --color-amber: #4f647b;
+  --color-navy: #1d2a3b;
 }
 
 body {
-  background: radial-gradient(circle at top, #efe7da 0%, var(--color-cream) 42%, #ddd3c4 100%);
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 600px at 15% -5%, #2a3340 0%, rgba(42, 51, 64, 0) 55%),
+    radial-gradient(900px 500px at 90% 0%, #1d2530 0%, rgba(29, 37, 48, 0) 52%),
+    linear-gradient(155deg, #f3f6fb 0%, var(--color-cream) 48%, #dfe5ec 100%);
   color: var(--color-charcoal);
   font-family: var(--font-sans);
+  letter-spacing: 0.012em;
+  line-height: 1.45;
+  text-rendering: optimizeLegibility;
 }
 
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-serif);
+  letter-spacing: 0.02em;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(to bottom, rgba(13, 17, 23, 0.07), rgba(13, 17, 23, 0.18)),
+    repeating-linear-gradient(
+      120deg,
+      rgba(255, 255, 255, 0.035) 0,
+      rgba(255, 255, 255, 0.035) 2px,
+      transparent 2px,
+      transparent 8px
+    );
+  mix-blend-mode: multiply;
+  opacity: 0.7;
+  z-index: 0;
 }

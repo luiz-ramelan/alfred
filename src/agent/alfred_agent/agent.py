@@ -1347,8 +1347,6 @@ output_formatter = Agent(
     ── FORMAT RULES ──
     • Be dry, witty, and impeccable — the Alfred Pennyworth voice.
     • Preserve ALL important names, dates, times, and counts exactly as they appear in the data.
-        • Respect explicit context preferences from the user request, including lines like
-            "Selected Context: work" or "Selected Context: home".
     • If a conflict between work and home was detected, explain which took precedence and why.
     • If no conflict, provide a clean summary of the requested information.
     • Mention any actions taken (emails sent, events created, items added to lists).
@@ -1395,9 +1393,6 @@ alfred_root = Agent(
     The formatter inside each workflow delivers the final reply.
 
     ── ROUTING RULES ──
-     0. If user request includes "Selected Context: work" route to work_flow.
-         If user request includes "Selected Context: home" route to home_flow.
-         This explicit selection overrides auto-routing unless the user asks for both.
     1. Professional requests (meetings, emails, contacts, work schedule)
        → delegate to work_flow.
     2. Household / domestic requests (family events, groceries, errands, home)
