@@ -893,9 +893,21 @@ export default function App() {
 
     let sessionId = auth.sessionId;
     if (!sessionId) {
-      sessionId = await createAlfredSession(auth.email, auth.token);
-      localStorage.setItem('alfred_session', sessionId);
-      setAuth((prev) => ({ ...prev, sessionId }));
+      try {
+        sessionId = await createAlfredSession(auth.email, auth.token);
+        localStorage.setItem('alfred_session', sessionId);
+        setAuth((prev) => ({ ...prev, sessionId }));
+      } catch (error) {
+        const message = String(error);
+        // Session bootstrap failed because token is stale or rejected.
+        if (message.includes('(401)') || message.includes('(403)')) {
+          localStorage.removeItem('alfred_token');
+          localStorage.removeItem('alfred_session');
+          setAuth((prev) => ({ ...prev, token: '', sessionId: '', error: 'Session expired. Please sign in again.' }));
+          return { text: 'Your Google session has expired. Please sign in again using the banner above.' };
+        }
+        throw error;
+      }
     }
 
     const enrichedMessage = [
