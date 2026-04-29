@@ -618,6 +618,7 @@ const ProfileScreen = ({
   const [name, setName] = useState(profile.name);
   const [role, setRole] = useState(profile.role);
   const [notes, setNotes] = useState(profile.onboardingNotes);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     setName(profile.name);
@@ -634,6 +635,8 @@ const ProfileScreen = ({
       defaultContext: classifyContext(role, notes),
       onboardingDone: true,
     }));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
   };
 
   return (
@@ -658,8 +661,8 @@ const ProfileScreen = ({
           </span>
         </div>
 
-        <button onClick={saveProfile} className="w-full bg-amber text-white rounded-xl py-2.5 text-sm font-semibold">
-          Save Profile
+        <button onClick={saveProfile} className={`w-full rounded-xl py-2.5 text-sm font-semibold transition-colors ${saved ? 'bg-green-500 text-white' : 'bg-amber text-white'}`}>
+          {saved ? '✓ Saved' : 'Save Profile'}
         </button>
 
         <button
@@ -907,6 +910,13 @@ export default function App() {
       return await sendToAlfred(auth.email, sessionId, auth.token, enrichedMessage);
     } catch (error) {
       const message = String(error);
+      // Token expired or rejected — force re-login
+      if (message.includes('(401)') || message.includes('(403)')) {
+        localStorage.removeItem('alfred_token');
+        localStorage.removeItem('alfred_session');
+        setAuth((prev) => ({ ...prev, token: '', sessionId: '', error: 'Session expired. Please sign in again.' }));
+        return { text: 'Your Google session has expired. Please sign in again using the banner above.' };
+      }
       if (!message.includes('(404)')) {
         throw error;
       }
