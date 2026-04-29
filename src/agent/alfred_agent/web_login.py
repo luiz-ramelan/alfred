@@ -91,6 +91,11 @@ SCOPES = " ".join([
     "https://www.googleapis.com/auth/contacts",
 ])
 
+DEFAULT_WORK_CONTEXT = ""
+DEFAULT_HOME_CONTEXT = ""
+SESSION_PROFILE_NAME_KEY = "ALFRED_PROFILE_NAME"
+SESSION_PREFERENCES_KEY = "ALFRED_PREFERENCES_CONSTRAINTS"
+
 
 def _parse_allowed_origins(raw_value: str) -> list[str]:
     value = raw_value.strip()
@@ -120,6 +125,62 @@ def _read_bearer_token(request: Request) -> str:
     if scheme.lower() != "bearer":
         return ""
     return token.strip()
+
+
+def _extract_user_request_from_payload(payload: dict) -> str:
+    message = payload.get("new_message")
+    if not isinstance(message, dict):
+        return ""
+    parts = message.get("parts")
+    if not isinstance(parts, list):
+        return ""
+    text_fragments: list[str] = []
+    for part in parts:
+        if isinstance(part, dict):
+            text = str(part.get("text", "")).strip()
+            if text:
+                text_fragments.append(text)
+    return "\n".join(text_fragments).strip()
+
+
+async def _load_session_profile_state(
+    app_name: str,
+    user_id: str,
+    session_id: str,
+) -> tuple[str, str]:
+    if (
+        adk_session_service is None
+        or not app_name
+        or not user_id
+        or not session_id
+    ):
+        return "", ""
+    try:
+        session = await adk_session_service.get_session(
+            app_name=app_name,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if not session:
+            return "", ""
+        state = getattr(session, "state", {}) or {}
+        if not isinstance(state, dict):
+            return "", ""
+        saved_name = str(state.get(SESSION_PROFILE_NAME_KEY, "")).strip()
+        saved_preferences = str(state.get(SESSION_PREFERENCES_KEY, "")).strip()
+        return saved_name, saved_preferences
+    except Exception as e:
+        logger.warning("[Gatekeeper] Could not load session profile state: %s", e)
+        return "", ""
+
+
+def _build_profile_prefix(name: str, preferences: str) -> str:
+    lines = [f"Principal Profile: name={name or 'Unknown'}."]
+    if preferences:
+        lines.append(f"Principal Preferences and Constraints: {preferences}")
+    else:
+        lines.append("Principal Preferences and Constraints: none provided.")
+    return "\n".join(lines)
 
 
 async def _latest_session_redirect_url() -> str:
@@ -385,6 +446,39 @@ async def gatekeeper_middleware(request: Request, call_next):
                             state_delta = payload.get("state_delta") or {}
                             if not isinstance(state_delta, dict):
                                 state_delta = {}
+
+                            current_name = str(state_delta.get(SESSION_PROFILE_NAME_KEY, "")).strip()
+                            current_preferences = str(state_delta.get(SESSION_PREFERENCES_KEY, "")).strip()
+                            if not current_name or not current_preferences:
+                                saved_name, saved_preferences = await _load_session_profile_state(
+                                    app_name or ADK_APP_NAME,
+                                    user_id or ADK_USER_ID,
+                                    session_id,
+                                )
+                                if not current_name and saved_name:
+                                    current_name = saved_name
+                                if not current_preferences and saved_preferences:
+                                    current_preferences = saved_preferences
+
+                            message_text = _extract_user_request_from_payload(payload)
+                            if message_text:
+                                has_profile_line = "Principal Profile:" in message_text
+                                has_preferences_line = "Principal Preferences and Constraints:" in message_text
+                                if not has_profile_line or not has_preferences_line:
+                                    prefix = _build_profile_prefix(current_name, current_preferences)
+                                    payload["new_message"] = {
+                                        "role": "user",
+                                        "parts": [{"text": f"{prefix}\nUser Request: {message_text}"}],
+                                    }
+
+                            if current_name:
+                                state_delta[SESSION_PROFILE_NAME_KEY] = current_name
+                            if current_preferences:
+                                state_delta[SESSION_PREFERENCES_KEY] = current_preferences
+
+                            # Ensure output formatter template vars always exist.
+                            state_delta.setdefault("work_context", DEFAULT_WORK_CONTEXT)
+                            state_delta.setdefault("home_context", DEFAULT_HOME_CONTEXT)
                             state_delta[SESSION_ACCESS_TOKEN_KEY] = token
                             if refresh_token:
                                 state_delta[SESSION_REFRESH_TOKEN_KEY] = refresh_token
@@ -405,6 +499,9 @@ async def gatekeeper_middleware(request: Request, call_next):
                             state = payload.get("state") or {}
                             if not isinstance(state, dict):
                                 state = {}
+                            # Seed default context keys on session creation.
+                            state.setdefault("work_context", DEFAULT_WORK_CONTEXT)
+                            state.setdefault("home_context", DEFAULT_HOME_CONTEXT)
                             state[SESSION_ACCESS_TOKEN_KEY] = token
                             if refresh_token:
                                 state[SESSION_REFRESH_TOKEN_KEY] = refresh_token

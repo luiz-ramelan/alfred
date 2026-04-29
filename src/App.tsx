@@ -13,7 +13,6 @@ import {
   Plus, 
   Send, 
   Briefcase,
-  Home,
   CalendarDays,
   MapPin,
   Clock,
@@ -92,6 +91,8 @@ const INITIAL_MESSAGES: Message[] = [];
 
 const PROFILE_STORAGE_KEY = 'alfred_profile';
 const CHAT_STORAGE_KEY = 'alfred_chat_messages';
+const SESSION_PROFILE_NAME_KEY = 'ALFRED_PROFILE_NAME';
+const SESSION_PREFERENCES_KEY = 'ALFRED_PREFERENCES_CONSTRAINTS';
 
 const AlfredMonogram = () => (
   <div className="w-8 h-8 rounded-full bg-amber flex items-center justify-center text-white font-serif font-bold text-sm shadow-sm">
@@ -116,6 +117,9 @@ const classifyContext = (role: string, notes: string): ContactContext => {
 
   return workScore > homeScore ? 'work' : 'home';
 };
+
+const sanitizeAssistantText = (text: string): string =>
+  text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 
 const EventDetails = ({
   event,
@@ -170,7 +174,7 @@ const EventDetails = ({
         <div className="flex flex-wrap gap-2">
           {related.map((person) => (
             <span key={person.id} className="px-3 py-1 rounded-full text-xs bg-white/60 border border-amber/20 text-charcoal">
-              {person.name} · {person.role}
+              {person.name}
             </span>
           ))}
         </div>
@@ -319,17 +323,18 @@ const DashboardScreen = ({
   const weekTotal = events.length;
   const workCount = events.filter((e) => e.context === 'work').length;
   const homeCount = events.filter((e) => e.context === 'home').length;
+  const hasPersonalization = Boolean(profile.onboardingNotes.trim());
 
   return (
     <div className="p-6 pb-28">
-      {!profile.onboardingDone && <OnboardingPanel profile={profile} setProfile={setProfile} />}
+      {!hasPersonalization && <OnboardingPanel profile={profile} setProfile={setProfile} />}
 
       <header className="mb-6">
         <h1 className="text-2xl font-serif font-bold text-charcoal leading-tight">
           Weekly Dashboard
         </h1>
         <p className="text-sm text-charcoal/60 mt-1">
-          {profile.onboardingDone ? `${profile.name}, default context: ${profile.defaultContext}` : 'Complete onboarding to personalize prioritization.'}
+          {hasPersonalization ? `${profile.name}, preferences saved.` : 'Complete onboarding to personalize Alfred.'}
         </p>
       </header>
 
@@ -442,7 +447,7 @@ const ChatScreen = ({
     if (callAlfred) {
       try {
         const response = await callAlfred(newUserMsg.text);
-        replyText = response.text;
+        replyText = sanitizeAssistantText(response.text);
         replyThought = response.thought;
       } catch {
         replyText = "I encountered an issue connecting to Alfred. Please check your connection.";
@@ -465,7 +470,7 @@ const ChatScreen = ({
       <header className="p-6 border-b border-amber/20 bg-charcoal/10 backdrop-blur-sm sticky top-0 z-10">
         <div className="flex items-center gap-3">
           <AlfredMonogram />
-          <div>
+          <div className="flex-1">
             <h2 className="font-serif font-bold text-charcoal">Alfred</h2>
             <p className="text-[10px] text-amber uppercase tracking-widest font-bold">Always at your service</p>
           </div>
@@ -616,12 +621,11 @@ const ProfileScreen = ({
   onSignOut: () => void;
 }) => {
   const [name, setName] = useState(profile.name);
-  const [role, setRole] = useState(profile.role);
   const [notes, setNotes] = useState(profile.onboardingNotes);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     setName(profile.name);
-    setRole(profile.role);
     setNotes(profile.onboardingNotes);
   }, [profile]);
 
@@ -629,18 +633,18 @@ const ProfileScreen = ({
     setProfile((prev) => ({
       ...prev,
       name,
-      role,
       onboardingNotes: notes,
-      defaultContext: classifyContext(role, notes),
       onboardingDone: true,
     }));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
   };
 
   return (
     <div className="p-6 pb-28">
       <header className="mb-6">
         <h1 className="text-2xl font-serif font-bold text-charcoal">Profile</h1>
-        <p className="text-sm text-charcoal/60">Editable anytime. Onboarding preferences can be refined later.</p>
+        <p className="text-sm text-charcoal/60">Edit your name and preference constraints anytime.</p>
       </header>
 
       <div className="bg-white/70 border border-amber/20 rounded-2xl p-4 mb-6 space-y-3">
@@ -648,18 +652,10 @@ const ProfileScreen = ({
           <PencilLine size={14} /> Profile Settings
         </div>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className="w-full rounded-xl bg-cream/70 border border-amber/20 px-3 py-2 text-sm outline-none" />
-        <input value={role} onChange={(e) => setRole(e.target.value)} placeholder="Role" className="w-full rounded-xl bg-cream/70 border border-amber/20 px-3 py-2 text-sm outline-none" />
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} placeholder="Preferences and constraints" className="w-full rounded-xl bg-cream/70 border border-amber/20 px-3 py-2 text-sm outline-none resize-none" />
 
-        <div className="flex items-center justify-between bg-charcoal/10 rounded-xl px-3 py-2">
-          <span className="text-xs text-charcoal/70">AI default context</span>
-          <span className={`text-[10px] uppercase tracking-widest font-bold px-2 py-1 rounded-full ${profile.defaultContext === 'work' ? 'bg-navy/15 text-navy' : 'bg-amber/20 text-amber'}`}>
-            {profile.defaultContext}
-          </span>
-        </div>
-
-        <button onClick={saveProfile} className="w-full bg-amber text-white rounded-xl py-2.5 text-sm font-semibold">
-          Save Profile
+        <button onClick={saveProfile} className={`w-full rounded-xl py-2.5 text-sm font-semibold transition-colors ${saved ? 'bg-green-500 text-white' : 'bg-amber text-white'}`}>
+          {saved ? '✓ Saved' : 'Save Profile'}
         </button>
 
         <button
@@ -790,7 +786,6 @@ export default function App() {
       return INITIAL_MESSAGES;
     }
   });
-
   // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Auth State Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const [auth, setAuth] = useState<AuthState>(() => ({
     token: localStorage.getItem('alfred_token') ?? '',
@@ -818,7 +813,7 @@ export default function App() {
         .then(({ email, name }) => {
           localStorage.setItem('alfred_email', email);
           setAuth(prev => ({ ...prev, email, loading: false }));
-          if (name) setProfile(prev => ({ ...prev, name, onboardingDone: true }));
+          if (name) setProfile(prev => ({ ...prev, name }));
         })
         .catch(() => setAuth(prev => ({ ...prev, loading: false })));
   }, []);
@@ -890,32 +885,57 @@ export default function App() {
 
     let sessionId = auth.sessionId;
     if (!sessionId) {
-      sessionId = await createAlfredSession(auth.email, auth.token);
-      localStorage.setItem('alfred_session', sessionId);
-      setAuth((prev) => ({ ...prev, sessionId }));
+      try {
+        sessionId = await createAlfredSession(auth.email, auth.token);
+        localStorage.setItem('alfred_session', sessionId);
+        setAuth((prev) => ({ ...prev, sessionId }));
+      } catch (error) {
+        const message = String(error);
+        // Session bootstrap failed because token is stale or rejected.
+        if (message.includes('(401)') || message.includes('(403)')) {
+          localStorage.removeItem('alfred_token');
+          localStorage.removeItem('alfred_session');
+          setAuth((prev) => ({ ...prev, token: '', sessionId: '', error: 'Session expired. Please sign in again.' }));
+          return { text: 'Your Google session has expired. Please sign in again using the banner above.' };
+        }
+        throw error;
+      }
     }
 
     const enrichedMessage = [
-      `Principal Profile: name=${profile.name || 'Unknown'}, role=${profile.role || 'Principal'}, default_context=${profile.defaultContext}.`,
-      profile.onboardingNotes ? `Principal Notes: ${profile.onboardingNotes}` : '',
+      `Principal Profile: name=${profile.name || 'Unknown'}.`,
+      profile.onboardingNotes ? `Principal Preferences and Constraints: ${profile.onboardingNotes}` : 'Principal Preferences and Constraints: none provided.',
+      'Formatting rule: For schedule/event responses, use concise plain-text headings and short summaries only. Never include HTML or raw tool payloads.',
       `User Request: ${msg}`,
     ]
       .filter(Boolean)
       .join('\n');
 
+    const stateDelta = {
+      [SESSION_PROFILE_NAME_KEY]: profile.name || '',
+      [SESSION_PREFERENCES_KEY]: profile.onboardingNotes || '',
+    };
+
     try {
-      return await sendToAlfred(auth.email, sessionId, auth.token, enrichedMessage);
+      return await sendToAlfred(auth.email, sessionId, auth.token, enrichedMessage, stateDelta);
     } catch (error) {
       const message = String(error);
+      // Token expired or rejected — force re-login
+      if (message.includes('(401)') || message.includes('(403)')) {
+        localStorage.removeItem('alfred_token');
+        localStorage.removeItem('alfred_session');
+        setAuth((prev) => ({ ...prev, token: '', sessionId: '', error: 'Session expired. Please sign in again.' }));
+        return { text: 'Your Google session has expired. Please sign in again using the banner above.' };
+      }
       if (!message.includes('(404)')) {
         throw error;
       }
       const newSessionId = await createAlfredSession(auth.email, auth.token);
       localStorage.setItem('alfred_session', newSessionId);
       setAuth((prev) => ({ ...prev, sessionId: newSessionId }));
-      return sendToAlfred(auth.email, newSessionId, auth.token, enrichedMessage);
+      return sendToAlfred(auth.email, newSessionId, auth.token, enrichedMessage, stateDelta);
     }
-  }, [auth.email, auth.sessionId, auth.token, profile.defaultContext, profile.name, profile.onboardingNotes, profile.role]);
+  }, [auth.email, auth.sessionId, auth.token, profile.name, profile.onboardingNotes]);
 
   // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Logging Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const addLog = (entry: string) => {
@@ -1011,7 +1031,7 @@ export default function App() {
         .then(({ email, name }) => {
           localStorage.setItem('alfred_email', email);
           setAuth(prev => ({ ...prev, email, loading: false }));
-          if (name) setProfile(prev => ({ ...prev, name, onboardingDone: true }));
+          if (name) setProfile(prev => ({ ...prev, name }));
         })
         .catch(() => setAuth(prev => ({ ...prev, email: 'user@gmail.com', loading: false })));
   };

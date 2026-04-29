@@ -1352,6 +1352,9 @@ output_formatter = Agent(
     • Mention any actions taken (emails sent, events created, items added to lists).
     • DO NOT add facts not present in the data above.
     • DO NOT mention internal tools, callbacks, agent names, or context keys.
+        • For schedule/event questions: output a short heading plus concise plain-text lines
+            (title, day/time, optional location). Never output full descriptions.
+        • NEVER include HTML tags or scraped markup in the final response.
     • DO NOT use bullet-point walls. Use flowing prose.
     • Keep it concise — one to three short paragraphs maximum.
     • DO NOT output raw YAML, JSON, or structured data — only natural language.
