@@ -91,8 +91,8 @@ SCOPES = " ".join([
     "https://www.googleapis.com/auth/contacts",
 ])
 
-DEFAULT_WORK_CONTEXT = "No work updates collected yet for this request."
-DEFAULT_HOME_CONTEXT = "No home updates collected yet for this request."
+DEFAULT_WORK_CONTEXT = ""
+DEFAULT_HOME_CONTEXT = ""
 
 
 def _parse_allowed_origins(raw_value: str) -> list[str]:

@@ -117,6 +117,9 @@ const classifyContext = (role: string, notes: string): ContactContext => {
   return workScore > homeScore ? 'work' : 'home';
 };
 
+const sanitizeAssistantText = (text: string): string =>
+  text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+
 const EventDetails = ({
   event,
   contacts,
@@ -408,11 +411,15 @@ const ChatScreen = ({
   setMessages,
   callAlfred,
   debugMode,
+  selectedContext,
+  onSelectContext,
 }: {
   messages: Message[];
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
   callAlfred?: (msg: string) => Promise<{ text: string; thought?: string }>;
   debugMode?: boolean;
+  selectedContext: ContactContext;
+  onSelectContext: (context: ContactContext) => void;
 }) => {
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -442,7 +449,7 @@ const ChatScreen = ({
     if (callAlfred) {
       try {
         const response = await callAlfred(newUserMsg.text);
-        replyText = response.text;
+        replyText = sanitizeAssistantText(response.text);
         replyThought = response.thought;
       } catch {
         replyText = "I encountered an issue connecting to Alfred. Please check your connection.";
@@ -465,9 +472,23 @@ const ChatScreen = ({
       <header className="p-6 border-b border-amber/20 bg-charcoal/10 backdrop-blur-sm sticky top-0 z-10">
         <div className="flex items-center gap-3">
           <AlfredMonogram />
-          <div>
+          <div className="flex-1">
             <h2 className="font-serif font-bold text-charcoal">Alfred</h2>
             <p className="text-[10px] text-amber uppercase tracking-widest font-bold">Always at your service</p>
+          </div>
+          <div className="flex gap-1 bg-white/70 border border-amber/20 rounded-xl p-1">
+            <button
+              onClick={() => onSelectContext('work')}
+              className={`px-2.5 py-1 text-[10px] uppercase tracking-wider font-bold rounded-lg ${selectedContext === 'work' ? 'bg-navy text-white' : 'text-charcoal/70'}`}
+            >
+              Work
+            </button>
+            <button
+              onClick={() => onSelectContext('home')}
+              className={`px-2.5 py-1 text-[10px] uppercase tracking-wider font-bold rounded-lg ${selectedContext === 'home' ? 'bg-amber text-white' : 'text-charcoal/70'}`}
+            >
+              Home
+            </button>
           </div>
         </div>
       </header>
@@ -793,6 +814,7 @@ export default function App() {
       return INITIAL_MESSAGES;
     }
   });
+  const [chatContext, setChatContext] = useState<ContactContext>(() => profile.defaultContext);
 
   // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Auth State Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const [auth, setAuth] = useState<AuthState>(() => ({
@@ -843,6 +865,11 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile));
   }, [profile]);
+
+  useEffect(() => {
+    if (!profile.onboardingDone) return;
+    setChatContext(profile.defaultContext);
+  }, [profile.defaultContext, profile.onboardingDone]);
 
   useEffect(() => {
     const serializable = chatMessages.map((msg) => ({
@@ -912,7 +939,9 @@ export default function App() {
 
     const enrichedMessage = [
       `Principal Profile: name=${profile.name || 'Unknown'}, role=${profile.role || 'Principal'}, default_context=${profile.defaultContext}.`,
-      profile.onboardingNotes ? `Principal Notes: ${profile.onboardingNotes}` : '',
+      `Selected Context: ${chatContext}. Use this context unless the user explicitly asks for the other context.`,
+      profile.onboardingNotes ? `Principal Preferences and Constraints: ${profile.onboardingNotes}` : 'Principal Preferences and Constraints: none provided.',
+      'Formatting rule: For schedule/event responses, use concise plain-text headings and short summaries only. Never include HTML or raw tool payloads.',
       `User Request: ${msg}`,
     ]
       .filter(Boolean)
@@ -937,7 +966,7 @@ export default function App() {
       setAuth((prev) => ({ ...prev, sessionId: newSessionId }));
       return sendToAlfred(auth.email, newSessionId, auth.token, enrichedMessage);
     }
-  }, [auth.email, auth.sessionId, auth.token, profile.defaultContext, profile.name, profile.onboardingNotes, profile.role]);
+  }, [auth.email, auth.sessionId, auth.token, chatContext, profile.defaultContext, profile.name, profile.onboardingNotes, profile.role]);
 
   // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Logging Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const addLog = (entry: string) => {
@@ -1082,6 +1111,8 @@ export default function App() {
             setMessages={setChatMessages}
             callAlfred={callAlfred}
             debugMode={debugMode}
+            selectedContext={chatContext}
+            onSelectContext={setChatContext}
           />
         );
       case 'contacts': return <ContactsScreen contacts={contacts} onAdd={addContact} />;
