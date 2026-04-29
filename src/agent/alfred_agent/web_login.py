@@ -91,6 +91,9 @@ SCOPES = " ".join([
     "https://www.googleapis.com/auth/contacts",
 ])
 
+DEFAULT_WORK_CONTEXT = "No work updates collected yet for this request."
+DEFAULT_HOME_CONTEXT = "No home updates collected yet for this request."
+
 
 def _parse_allowed_origins(raw_value: str) -> list[str]:
     value = raw_value.strip()
@@ -385,6 +388,9 @@ async def gatekeeper_middleware(request: Request, call_next):
                             state_delta = payload.get("state_delta") or {}
                             if not isinstance(state_delta, dict):
                                 state_delta = {}
+                            # Ensure output formatter template vars always exist.
+                            state_delta.setdefault("work_context", DEFAULT_WORK_CONTEXT)
+                            state_delta.setdefault("home_context", DEFAULT_HOME_CONTEXT)
                             state_delta[SESSION_ACCESS_TOKEN_KEY] = token
                             if refresh_token:
                                 state_delta[SESSION_REFRESH_TOKEN_KEY] = refresh_token
@@ -405,6 +411,9 @@ async def gatekeeper_middleware(request: Request, call_next):
                             state = payload.get("state") or {}
                             if not isinstance(state, dict):
                                 state = {}
+                            # Seed default context keys on session creation.
+                            state.setdefault("work_context", DEFAULT_WORK_CONTEXT)
+                            state.setdefault("home_context", DEFAULT_HOME_CONTEXT)
                             state[SESSION_ACCESS_TOKEN_KEY] = token
                             if refresh_token:
                                 state[SESSION_REFRESH_TOKEN_KEY] = refresh_token
