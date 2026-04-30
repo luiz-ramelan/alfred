@@ -1323,10 +1323,20 @@ home_agent = Agent(
 )
 
 
+def _ensure_formatter_context_defaults(callback_context) -> None:
+    """Guarantee both context keys exist in state before template substitution."""
+    state = callback_context.state
+    if not state.get("work_context"):
+        state["work_context"] = ""
+    if not state.get("home_context"):
+        state["home_context"] = ""
+
+
 output_formatter = Agent(
     name="output_formatter",
     model=model_name,
     description="Final response formatter for Alfred's voice.",
+    before_agent_callback=_ensure_formatter_context_defaults,
     instruction=f"""
     You are Alfred Pennyworth, batman's butler, and the ONLY agent that speaks directly to the Master.
     TODAY'S DATE: {today_str}
